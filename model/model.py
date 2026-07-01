@@ -2,7 +2,7 @@ from transformers import PretrainedConfig
 
 
 class NinjaMindConfig(PretrainedConfig):
-    model_type = "mokiomind"
+    model_type = "ninjamind"
 
     def __init__(
         self,
@@ -77,7 +77,7 @@ import torch.nn as nn
 import math
 
 
-class RMSNorm(nn.Module):
+class RMSNorm(torch.nn.Module):
     def __init__(self, dim:int, eps:float=1e-8):
         super().__init__()
         self.dim = dim
@@ -125,6 +125,56 @@ def precompute_freqs_cis(dim:int, end:int=int(32*1024),rope_base:float=1e6,rope_
         return freqs_cos, freqs_sin
     
 
+def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim = 1):
+    def rotary_half(x): return torch.cat((-x[...,x.shape[-1] // 2: ], x[..., : x.shape[-1] // 2]), dim = -1)
 
+    q_embed = (q * cos.unsqueeze(unsqueeze_dim)) + (rotary_half(q) * sin.unsqueeze(unsqueeze_dim)).to(q.dtype)
 
+    k_embed = (k * cos.unsqueeze(unsqueeze_dim)) + (rotary_half(k) * sin.unsqueeze(unsqueeze_dim)).to(k.dtype)
+
+    return q_embed, k_embed
+
+def repeat_kv(x:torch.Tensor, n_rep:int) -> torch.Tensor:
+    bs, slen, num_key_value_head, head_dim = x.shape()
+    if n_rep == 1:
+        return x
+    
+    return (
+        x[:,:,:,None,:]
+        .expand(bs, slen, num_key_value_head, n_rep, head_dim)
+        .reshape(bs, slen, num_key_value_head * n_rep, head_dim)
+        )
         
+
+class Attention(nn.Module):
+    def __init__(self, config:NinjaMindConfig):
+        super().__init__()
+        self.num_key_value_heads = config.num_attention_heads if config.num_key_value_heads is None else config.num_key_value_heads
+
+        self.n_local_heads = config.num_attention_heads
+        self.n_local_kv_heads = self.num_key_value_heads
+        self.n_rep = self.n_local_heads // self.n_local_kv_heads
+        self.head_dim = config.hidden_size // config.num_attention_heads
+
+        self.q_proj = nn.Linear(config.hidden_size, self.head_dim * config.num_attention_heads, bias = False)
+        self.k_proj = nn.Linear(config.hidden_size, self.num_key_value_heads * self.head_dim, bias = False)
+        self.v_proj = nn.Linear(config.hidden_size, self.num_key_value_heads * self.head_dim, bias = False)
+        self.o_proj = nn.Linear(config.num_attention_heads * self.head_dim, config.hidden_size, bias = False)
+
+        self.q_norm = RMSNorm(self.head_dim, eps = config.rms_norm_eps)
+        self.k_norm = RMSNorm(self.head_dim, eps = config.rms_norm_eps)
+
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+        self.dropout = config.dropout
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention') and config.flash_attn
+
+    def forward(self, x, position_embeddings, past_value_key = None, use_cache = False, attention_mask = None):
+        
+
+
+
+
+
+
+
