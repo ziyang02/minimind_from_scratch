@@ -1,7 +1,7 @@
 from transformers import PretrainedConfig
 
 
-class MokioMindConfig(PretrainedConfig):
+class NinjaMindConfig(PretrainedConfig):
     model_type = "mokiomind"
 
     def __init__(
@@ -70,3 +70,61 @@ class MokioMindConfig(PretrainedConfig):
             if self.inference_rope_scaling
             else None
         )
+
+
+import torch
+import torch.nn as nn
+import math
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim:int, eps:float=1e-8):
+        super().__init__()
+        self.dim = dim
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _Norm(self,x):
+        return torch.rsqrt(x.pow(2).mean(-1,keepdim=True)+self.eps)
+    
+    def forward(self,x):
+        return self.weight * self._Norm(x.float()).type_as(x)
+    
+
+
+def precompute_freqs_cis(dim:int, end:int=int(32*1024),rope_base:float=1e6,rope_scaling:dict = None):
+    freqs,attn_factor = 1.0/rope_base**(torch.arrange(0,dim,2)[:dim//2].float() / dim), 1.0
+
+    if rope_scaling is not None:
+        orig_max, factor, beta_fast, beta_slow, attn_factor = (
+            rope_scaling.get(original_max_position_embeddings,2048), 
+            rope_scaling.get(factor,16),
+            rope_scaling.get(beta_fast,32),
+            rope_scaling.get(beta_slow,1),
+            rope_scaling.get(attn_factor,1.0)
+        )
+
+        if end > orig_max:
+            inv_dim = lambda b: (dim * math.log(orig_max / (2 * b * math.pi))) / (2 * math.log(rope_base))
+
+            low,high = max(math.floor(inv_dim(beta_fast)),0), min(math.ceil(inv_dim(beta_slow)),dim)
+
+            ramp = torch.clamp((torch.arrange(dim // 2, device = freqs.device).float() - low) / max(high - low, 0.01), 0, 1)
+
+            freqs = freqs * (1 - ramp + ramp * attn_factor)
+        
+
+        t = torch.arrange(end, device = freqs.device)
+
+        freqs = torch.outer(freqs, t).float()
+
+        freqs_cos = torch.cat([torch.cos(freqs), torch.cos(freqs)], dim = -1) * attn_factor
+
+        freqs_sin = torch.cat([torch.sin(freqs), torch.sin(freqs)], dim = -1) * attn_factor
+
+        return freqs_cos, freqs_sin
+    
+
+
+
+        
