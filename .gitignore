@@ -9,3 +9,8 @@ wheels/
 # Virtual environments
 .venv
 .DS_Store
+
+# Training artifacts / downloaded data
+out/
+dataset/*.jsonl
+dataset/.cache/
