@@ -62,7 +62,7 @@ __all__ = [
 def load_jsonl(path):
     """Load a ``.jsonl`` file into a list of dicts (one per line)."""
     samples = []
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line_no, line in enumerate(f, 1):
             line = line.strip()
             if not line:
@@ -90,9 +90,17 @@ def build_chat_prompt(tokenizer, messages, add_generation_prompt=False):
     )
 
 
-def pad_to_length(ids, max_length, pad_id, padding_side="right"):
+def pad_to_length(
+    ids,
+    max_length,
+    pad_id,
+    padding_side="right",
+    truncation_side="right",
+):
     """Truncate or pad a list of token ids to exactly ``max_length``."""
-    ids = list(ids[:max_length])
+    if truncation_side not in {"left", "right"}:
+        raise ValueError("truncation_side must be 'left' or 'right'")
+    ids = list(ids[-max_length:] if truncation_side == "left" else ids[:max_length])
     pad = [pad_id] * (max_length - len(ids))
     return (ids + pad) if padding_side == "right" else (pad + ids)
 
@@ -150,20 +158,27 @@ def rl_collate(batch, tokenizer, max_prompt_len):
 
     Left padding keeps every prompt's final token flush against the position
     where generation starts, which is what causal-LM ``generate`` expects.
+    Long prompts are truncated from the left for the same reason: the most
+    recent user turn and assistant generation header must remain present.
     Reference fields (``answer``, ``tools``, ...) are returned as plain lists.
     """
     prompts = [b["prompt"] for b in batch]
-    original_side = tokenizer.padding_side
-    tokenizer.padding_side = "left"
-    enc = tokenizer(
-        prompts,
-        add_special_tokens=False,
-        truncation=True,
-        max_length=max_prompt_len,
-        padding="max_length",
-        return_tensors="pt",
-    )
-    tokenizer.padding_side = original_side
+    original_padding_side = tokenizer.padding_side
+    original_truncation_side = tokenizer.truncation_side
+    try:
+        tokenizer.padding_side = "left"
+        tokenizer.truncation_side = "left"
+        enc = tokenizer(
+            prompts,
+            add_special_tokens=False,
+            truncation=True,
+            max_length=max_prompt_len,
+            padding="max_length",
+            return_tensors="pt",
+        )
+    finally:
+        tokenizer.padding_side = original_padding_side
+        tokenizer.truncation_side = original_truncation_side
     out = {
         "input_ids": enc["input_ids"],
         "attention_mask": enc["attention_mask"],
@@ -194,7 +209,8 @@ class _JSONLDataset(Dataset):
 
     def _response_markers(self):
         """Token ids that bracket an assistant response in a rendered prompt."""
-        start = self.tokenizer("<|im_start|>assistant", add_special_tokens=False).input_ids
+        # Include the header newline: it is prompt formatting, not an answer token.
+        start = self.tokenizer("<|im_start|>assistant\n", add_special_tokens=False).input_ids
         end = self.tokenizer("<|im_end|>", add_special_tokens=False).input_ids
         return start, end
 
@@ -232,12 +248,25 @@ class SFTDataset(_JSONLDataset):
     def _encode_conversation(self, conversations):
         prompt = build_chat_prompt(self.tokenizer, conversations, add_generation_prompt=False)
         ids = self.tokenizer(prompt, add_special_tokens=False).input_ids
-        return pad_to_length(ids, self.max_length, self.pad_id)
+        # Preserve the newest assistant response when a conversation is too
+        # long. Right truncation can remove the response marker entirely and
+        # silently turn the sample into a zero-gradient batch item.
+        return pad_to_length(
+            ids,
+            self.max_length,
+            self.pad_id,
+            truncation_side="left",
+        )
 
     def __getitem__(self, index):
         conversations = self.samples[index]["conversations"]
         ids = self._encode_conversation(conversations)
         loss_mask = generate_response_loss_mask(ids, self.start_ids, self.end_ids, self.max_length)
+        if not any(loss_mask):
+            raise ValueError(
+                f"SFT sample {index} has no complete assistant response within "
+                f"max_length={self.max_length}; increase --max_length"
+            )
         return make_supervised_tensors(ids, loss_mask)
 
 
@@ -256,17 +285,69 @@ class DPODataset(_JSONLDataset):
         super().__init__(data_path, tokenizer, max_length)
         self.start_ids, self.end_ids = self._response_markers()
 
-    def _encode_side(self, messages):
-        prompt = build_chat_prompt(self.tokenizer, messages, add_generation_prompt=False)
-        ids = self.tokenizer(prompt, add_special_tokens=False).input_ids
-        ids = pad_to_length(ids, self.max_length, self.pad_id)
-        loss_mask = generate_response_loss_mask(ids, self.start_ids, self.end_ids, self.max_length)
-        return make_supervised_tensors(ids, loss_mask)
+    def _encode_pair(self, chosen, rejected, index):
+        if not chosen or not rejected:
+            raise ValueError(f"DPO sample {index} must contain chosen and rejected messages")
+        if chosen[:-1] != rejected[:-1]:
+            raise ValueError(f"DPO sample {index} chosen/rejected prompts must be identical")
+        if chosen[-1].get("role") != "assistant" or rejected[-1].get("role") != "assistant":
+            raise ValueError(f"DPO sample {index} must end both sides with an assistant response")
+
+        prompt_messages = chosen[:-1]
+        prompt_text = build_chat_prompt(
+            self.tokenizer,
+            prompt_messages,
+            add_generation_prompt=True,
+        )
+        prompt_ids = self.tokenizer(prompt_text, add_special_tokens=False).input_ids
+
+        def response_suffix(messages):
+            full_text = build_chat_prompt(
+                self.tokenizer,
+                messages,
+                add_generation_prompt=False,
+            )
+            full_ids = self.tokenizer(full_text, add_special_tokens=False).input_ids
+            if full_ids[: len(prompt_ids)] != prompt_ids:
+                raise ValueError(
+                    f"DPO sample {index} chat template does not preserve the common prompt"
+                )
+            return full_ids[len(prompt_ids) :]
+
+        chosen_response = response_suffix(chosen)
+        rejected_response = response_suffix(rejected)
+        response_budget = max(len(chosen_response), len(rejected_response))
+        prompt_budget = self.max_length - response_budget
+        if prompt_budget < len(self.start_ids):
+            raise ValueError(
+                f"DPO sample {index} response does not fit within max_length={self.max_length}; "
+                "increase --max_length"
+            )
+        common_prompt = prompt_ids[-prompt_budget:]
+        if common_prompt[-len(self.start_ids) :] != self.start_ids:
+            raise ValueError(
+                f"DPO sample {index} cannot retain the assistant marker within "
+                f"max_length={self.max_length}; increase --max_length"
+            )
+
+        def tensors(response_ids):
+            ids = common_prompt + response_ids
+            loss_mask = [0] * len(common_prompt) + [1] * len(response_ids)
+            ids = pad_to_length(ids, self.max_length, self.pad_id)
+            loss_mask = pad_to_length(loss_mask, self.max_length, 0)
+            return make_supervised_tensors(ids, loss_mask)
+
+        return tensors(chosen_response), tensors(rejected_response)
 
     def __getitem__(self, index):
         sample = self.samples[index]
-        x_c, y_c, m_c = self._encode_side(sample["chosen"])
-        x_r, y_r, m_r = self._encode_side(sample["rejected"])
+        chosen, rejected = self._encode_pair(
+            sample["chosen"],
+            sample["rejected"],
+            index,
+        )
+        x_c, y_c, m_c = chosen
+        x_r, y_r, m_r = rejected
         return {
             "x_chosen": x_c, "y_chosen": y_c, "mask_chosen": m_c,
             "x_rejected": x_r, "y_rejected": y_r, "mask_rejected": m_r,

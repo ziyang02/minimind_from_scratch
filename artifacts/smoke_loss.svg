@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500">
+<rect width="100%" height="100%" fill="white"/>
+<text x="450" y="36" text-anchor="middle" font-family="sans-serif" font-size="24" font-weight="600">CPU demo smoke losses</text>
+<text x="70" y="92" font-family="sans-serif" font-size="17" font-weight="600" fill="#377eb8">pretrain</text>
+<line x1="115" y1="105" x2="115" y2="235" stroke="#444"/>
+<line x1="115" y1="235" x2="450" y2="235" stroke="#444"/>
+<text x="108" y="110" text-anchor="end" font-family="monospace" font-size="11">5.9037</text>
+<text x="108" y="239" text-anchor="end" font-family="monospace" font-size="11">5.8727</text>
+<polyline points="115.0,185.5 450.0,154.5" fill="none" stroke="#377eb8" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="115.0" cy="185.5" r="4" fill="#377eb8"/>
+<text x="115.0" y="253" text-anchor="middle" font-family="sans-serif" font-size="11">1</text>
+<text x="115.0" y="177.5" text-anchor="middle" font-family="monospace" font-size="10">5.8845</text>
+<circle cx="450.0" cy="154.5" r="4" fill="#377eb8"/>
+<text x="450.0" y="253" text-anchor="middle" font-family="sans-serif" font-size="11">2</text>
+<text x="450.0" y="146.5" text-anchor="middle" font-family="monospace" font-size="10">5.8919</text>
+<text x="500" y="92" font-family="sans-serif" font-size="17" font-weight="600" fill="#4daf4a">sft</text>
+<line x1="545" y1="105" x2="545" y2="235" stroke="#444"/>
+<line x1="545" y1="235" x2="880" y2="235" stroke="#444"/>
+<text x="538" y="110" text-anchor="end" font-family="monospace" font-size="11">5.9052</text>
+<text x="538" y="239" text-anchor="end" font-family="monospace" font-size="11">5.8507</text>
+<polyline points="545.0,133.1 880.0,206.9" fill="none" stroke="#4daf4a" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="545.0" cy="133.1" r="4" fill="#4daf4a"/>
+<text x="545.0" y="253" text-anchor="middle" font-family="sans-serif" font-size="11">1</text>
+<text x="545.0" y="125.1" text-anchor="middle" font-family="monospace" font-size="10">5.8934</text>
+<circle cx="880.0" cy="206.9" r="4" fill="#4daf4a"/>
+<text x="880.0" y="253" text-anchor="middle" font-family="sans-serif" font-size="11">2</text>
+<text x="880.0" y="198.9" text-anchor="middle" font-family="monospace" font-size="10">5.8625</text>
+<text x="70" y="312" font-family="sans-serif" font-size="17" font-weight="600" fill="#984ea3">lora</text>
+<line x1="115" y1="325" x2="115" y2="455" stroke="#444"/>
+<line x1="115" y1="455" x2="450" y2="455" stroke="#444"/>
+<text x="108" y="330" text-anchor="end" font-family="monospace" font-size="11">5.9183</text>
+<text x="108" y="459" text-anchor="end" font-family="monospace" font-size="11">5.8841</text>
+<polyline points="115.0,410.1 450.0,369.9" fill="none" stroke="#984ea3" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="115.0" cy="410.1" r="4" fill="#984ea3"/>
+<text x="115.0" y="473" text-anchor="middle" font-family="sans-serif" font-size="11">1</text>
+<text x="115.0" y="402.1" text-anchor="middle" font-family="monospace" font-size="10">5.8959</text>
+<circle cx="450.0" cy="369.9" r="4" fill="#984ea3"/>
+<text x="450.0" y="473" text-anchor="middle" font-family="sans-serif" font-size="11">2</text>
+<text x="450.0" y="361.9" text-anchor="middle" font-family="monospace" font-size="10">5.9065</text>
+<text x="500" y="312" font-family="sans-serif" font-size="17" font-weight="600" fill="#ff7f00">dpo</text>
+<line x1="545" y1="325" x2="545" y2="455" stroke="#444"/>
+<line x1="545" y1="455" x2="880" y2="455" stroke="#444"/>
+<text x="538" y="330" text-anchor="end" font-family="monospace" font-size="11">0.6951</text>
+<text x="538" y="459" text-anchor="end" font-family="monospace" font-size="11">0.6911</text>
+<polyline points="545.0,390.0 880.0,390.0" fill="none" stroke="#ff7f00" stroke-width="3" stroke-linejoin="round"/>
+<circle cx="545.0" cy="390.0" r="4" fill="#ff7f00"/>
+<text x="545.0" y="473" text-anchor="middle" font-family="sans-serif" font-size="11">1</text>
+<text x="545.0" y="382.0" text-anchor="middle" font-family="monospace" font-size="10">0.6931</text>
+<circle cx="880.0" cy="390.0" r="4" fill="#ff7f00"/>
+<text x="880.0" y="473" text-anchor="middle" font-family="sans-serif" font-size="11">2</text>
+<text x="880.0" y="382.0" text-anchor="middle" font-family="monospace" font-size="10">0.6931</text>
+<text x="450" y="490" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#555">optimizer step (each panel uses its own y-axis)</text>
+</svg>

@@ -1,0 +1,205 @@
+{
+  "created_at": "2026-07-21T08:40:19.491248+00:00",
+  "git_commit": "9c9f940241da73fe5f4eb06f5b9bd54ca3aed519",
+  "git_dirty": true,
+  "seed": 42,
+  "model": {
+    "parameters": 27376,
+    "hidden_size": 32,
+    "num_hidden_layers": 1,
+    "num_attention_heads": 4,
+    "num_key_value_heads": 2,
+    "vocab_size": 372
+  },
+  "environment": {
+    "python": "3.12.7",
+    "pytorch": "2.12.1",
+    "platform": "macOS-15.7.4-arm64-arm-64bit",
+    "machine": "arm64",
+    "device": "cpu",
+    "cuda_available": false,
+    "mps_available": false
+  },
+  "stages": [
+    {
+      "stage": "pretrain",
+      "command": [
+        "/Users/ziyang/Desktop/minimind_from_scratch/.venv/bin/python",
+        "trainer/train_pretrain.py",
+        "--data_path",
+        "dataset/demo/pretrain_demo.jsonl",
+        "--tokenizer_dir",
+        "tokenizer",
+        "--out_dir",
+        "/Users/ziyang/Desktop/minimind_from_scratch/out/smoke_final",
+        "--hidden_size",
+        "32",
+        "--num_hidden_layers",
+        "1",
+        "--num_attention_heads",
+        "4",
+        "--num_key_value_heads",
+        "2",
+        "--max_length",
+        "96",
+        "--batch_size",
+        "2",
+        "--max_steps",
+        "2",
+        "--log_interval",
+        "1",
+        "--device",
+        "cpu",
+        "--seed",
+        "42"
+      ],
+      "duration_seconds": 2.8703,
+      "losses": [
+        5.8845,
+        5.8919
+      ],
+      "log_lines": [
+        "epoch 1/1 step 1/2 loss 5.8845 lr 5.00e-04",
+        "epoch 1/1 step 2/2 loss 5.8919 lr 5.00e-04"
+      ]
+    },
+    {
+      "stage": "sft",
+      "command": [
+        "/Users/ziyang/Desktop/minimind_from_scratch/.venv/bin/python",
+        "trainer/train_sft.py",
+        "--data_path",
+        "dataset/demo/sft_demo.jsonl",
+        "--init_from",
+        "/Users/ziyang/Desktop/minimind_from_scratch/out/smoke_final/pretrain_32.pth",
+        "--tokenizer_dir",
+        "tokenizer",
+        "--out_dir",
+        "/Users/ziyang/Desktop/minimind_from_scratch/out/smoke_final",
+        "--hidden_size",
+        "32",
+        "--num_hidden_layers",
+        "1",
+        "--num_attention_heads",
+        "4",
+        "--num_key_value_heads",
+        "2",
+        "--max_length",
+        "96",
+        "--batch_size",
+        "2",
+        "--max_steps",
+        "2",
+        "--log_interval",
+        "1",
+        "--device",
+        "cpu",
+        "--seed",
+        "42"
+      ],
+      "duration_seconds": 3.2447,
+      "losses": [
+        5.8934,
+        5.8625
+      ],
+      "log_lines": [
+        "epoch 1/1 step 1/2 loss 5.8934 lr 5.00e-06",
+        "epoch 1/1 step 2/2 loss 5.8625 lr 5.00e-06"
+      ]
+    },
+    {
+      "stage": "lora",
+      "command": [
+        "/Users/ziyang/Desktop/minimind_from_scratch/.venv/bin/python",
+        "trainer/train_lora.py",
+        "--data_path",
+        "dataset/demo/sft_demo.jsonl",
+        "--init_from",
+        "/Users/ziyang/Desktop/minimind_from_scratch/out/smoke_final/full_sft_32.pth",
+        "--lora_rank",
+        "2",
+        "--lora_alpha",
+        "4",
+        "--tokenizer_dir",
+        "tokenizer",
+        "--out_dir",
+        "/Users/ziyang/Desktop/minimind_from_scratch/out/smoke_final",
+        "--hidden_size",
+        "32",
+        "--num_hidden_layers",
+        "1",
+        "--num_attention_heads",
+        "4",
+        "--num_key_value_heads",
+        "2",
+        "--max_length",
+        "96",
+        "--batch_size",
+        "2",
+        "--max_steps",
+        "2",
+        "--log_interval",
+        "1",
+        "--device",
+        "cpu",
+        "--seed",
+        "42"
+      ],
+      "duration_seconds": 4.3463,
+      "losses": [
+        5.8959,
+        5.9065
+      ],
+      "log_lines": [
+        "epoch 1/1 step 1/2 loss 5.8959 lr 1.00e-04",
+        "epoch 1/1 step 2/2 loss 5.9065 lr 1.00e-04"
+      ]
+    },
+    {
+      "stage": "dpo",
+      "command": [
+        "/Users/ziyang/Desktop/minimind_from_scratch/.venv/bin/python",
+        "trainer/train_dpo.py",
+        "--data_path",
+        "dataset/demo/dpo_demo.jsonl",
+        "--init_from",
+        "/Users/ziyang/Desktop/minimind_from_scratch/out/smoke_final/full_sft_32.pth",
+        "--tokenizer_dir",
+        "tokenizer",
+        "--out_dir",
+        "/Users/ziyang/Desktop/minimind_from_scratch/out/smoke_final",
+        "--hidden_size",
+        "32",
+        "--num_hidden_layers",
+        "1",
+        "--num_attention_heads",
+        "4",
+        "--num_key_value_heads",
+        "2",
+        "--max_length",
+        "96",
+        "--batch_size",
+        "2",
+        "--max_steps",
+        "2",
+        "--log_interval",
+        "1",
+        "--device",
+        "cpu",
+        "--seed",
+        "42"
+      ],
+      "duration_seconds": 2.8307,
+      "losses": [
+        0.6931,
+        0.6931
+      ],
+      "log_lines": [
+        "epoch 1/1 step 1/2 loss 0.6931 preference_accuracy 0.000 chosen_reward 0.0000 rejected_reward 0.0000 margin 0.0000 lr 5.00e-07",
+        "epoch 1/1 step 2/2 loss 0.6931 preference_accuracy 0.500 chosen_reward -0.0000 rejected_reward 0.0000 margin -0.0000 lr 5.00e-07"
+      ]
+    }
+  ],
+  "generation_samples": "/Users/ziyang/Desktop/minimind_from_scratch/artifacts/generation_samples.json",
+  "loss_plot": "/Users/ziyang/Desktop/minimind_from_scratch/artifacts/smoke_loss.svg"
+}

@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install project and development dependencies
+        run: uv sync --frozen --extra cpu --extra dev
+      - name: Lint
+        run: uv run ruff check .
+      - name: Unit tests
+        run: uv run pytest -q
+      - name: CPU model smoke test
+        run: uv run python scripts/run_model.py
+      - name: Training pipeline smoke test
+        run: uv run python scripts/smoke_train.py --output-dir /tmp/minimind-smoke --artifact /tmp/smoke_train.json

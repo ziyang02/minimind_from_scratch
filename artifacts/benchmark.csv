@@ -1,0 +1,4 @@
+attention,query_heads,key_value_heads,group_size,parameter_count,prefill_sdpa_executed,prefill_latency_ms_mean,prefill_latency_ms_std,decode_cached_tokens_per_second_mean,decode_cached_tokens_per_second_std,decode_no_cache_tokens_per_second_mean,decode_no_cache_tokens_per_second_std,cache_decode_speedup,kv_cache_sequence_length,kv_cache_theoretical_bytes,kv_cache_tensor_payload_bytes,kv_cache_prefill_tensor_payload_bytes,cuda_peak_allocated_bytes
+MHA,4,4,1,82144,True,0.4745037597604096,0.027585850295231272,4133.18051512442,176.39995626128103,1879.166122766949,88.0160447807977,2.1994758553004257,160,81920,81920,65536,
+GQA,4,2,2,78048,True,0.48033541010227054,0.021022638267221845,3660.560896526638,341.429504178765,1478.8481024595874,184.1243035709934,2.4752784890067305,160,40960,40960,32768,
+MQA,4,1,4,76000,True,0.5271079100202769,0.026434359494241163,3713.703897851354,498.5045859731875,1360.273659423964,222.43935947885382,2.730115276527518,160,20480,20480,16384,

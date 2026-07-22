@@ -1,0 +1,4 @@
+{"chosen": [{"role": "user", "content": "What is 2 plus 2?"}, {"role": "assistant", "content": "2 plus 2 equals 4."}], "rejected": [{"role": "user", "content": "What is 2 plus 2?"}, {"role": "assistant", "content": "2 plus 2 equals 5."}]}
+{"chosen": [{"role": "user", "content": "What is 3 plus 4?"}, {"role": "assistant", "content": "3 plus 4 equals 7."}], "rejected": [{"role": "user", "content": "What is 3 plus 4?"}, {"role": "assistant", "content": "3 plus 4 equals 6."}]}
+{"chosen": [{"role": "user", "content": "What is 5 plus 1?"}, {"role": "assistant", "content": "5 plus 1 equals 6."}], "rejected": [{"role": "user", "content": "What is 5 plus 1?"}, {"role": "assistant", "content": "5 plus 1 equals 4."}]}
+{"chosen": [{"role": "user", "content": "What is 8 plus 9?"}, {"role": "assistant", "content": "8 plus 9 equals 17."}], "rejected": [{"role": "user", "content": "What is 8 plus 9?"}, {"role": "assistant", "content": "8 plus 9 equals 18."}]}

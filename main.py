@@ -1,6 +1,11 @@
-def main():
-    print("Hello from minimind-from-scratch!")
+"""Project CLI entry point for local streaming inference."""
+
+from inference import cli_main
+
+
+def main() -> int:
+    return cli_main()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

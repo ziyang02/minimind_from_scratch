@@ -1,0 +1,22 @@
+{
+  "checkpoint": "/Users/ziyang/Desktop/minimind_from_scratch/out/smoke_final/full_sft_32.pth",
+  "decoding": {
+    "temperature": 0,
+    "max_new_tokens": 12,
+    "seed": 42
+  },
+  "samples": [
+    {
+      "prompt": "What is 2 plus 2?",
+      "completion": "\n\n\n\n\n\n\n\n\n\n\n\n"
+    },
+    {
+      "prompt": "What is 3 plus 4?",
+      "completion": "\n\n\n\n\n\n\n\n\n\n\n\n"
+    },
+    {
+      "prompt": "What is 8 plus 1?",
+      "completion": "\n\n\n\n\n\n\n\n\n\n\n\n"
+    }
+  ]
+}

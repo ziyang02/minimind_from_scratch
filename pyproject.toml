@@ -1,12 +1,81 @@
 [project]
 name = "minimind-from-scratch"
 version = "0.1.0"
-description = "Add your description here"
+description = "A reproducible decoder-only Transformer training stack for learning LLM systems end to end"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
-    "numpy>=2.3.4",
-    "pandas>=2.3.3",
-    "torch>=2.9.0",
-    "transformers>=4.57.1",
+    "numpy>=1.26",
+    "tokenizers>=0.22,<0.23",
+    "transformers>=5.13,<5.14",
 ]
+
+[project.optional-dependencies]
+cpu = [
+    "torch>=2.12,<2.13",
+]
+cu130 = [
+    "torch>=2.12,<2.13",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+]
+web = [
+    "gradio>=5.0",
+]
+benchmark = [
+    "matplotlib>=3.8",
+]
+
+[project.scripts]
+ninjamind = "main:main"
+ninjamind-web = "webui:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["inference", "main", "webui"]
+
+[tool.setuptools.packages.find]
+include = ["dataset*", "model*", "trainer*"]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu130", extra = "cu130", marker = "sys_platform == 'linux'" },
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cu130" },
+    ],
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["artifacts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "created_at_utc": "2026-07-21T08:42:57.856735+00:00",
+  "command": [
+    "/Users/ziyang/Desktop/minimind_from_scratch/.venv/bin/python",
+    "scripts/benchmark_attention.py"
+  ],
+  "environment": {
+    "python": "3.12.7",
+    "pytorch": "2.12.1",
+    "platform": "macOS-15.7.4-arm64-arm-64bit",
+    "processor": "arm",
+    "device_type": "cpu",
+    "device_name": "arm",
+    "torch_num_threads": 1,
+    "dtype": "float32",
+    "git_commit": "9c9f940241da73fe5f4eb06f5b9bd54ca3aed519",
+    "git_worktree_dirty": true,
+    "plot_backend": "matplotlib 3.11.1"
+  },
+  "config": {
+    "seed": 42,
+    "repeats": 5,
+    "warmup": 1,
+    "prefill_iterations_per_sample": 20,
+    "batch_size": 1,
+    "sequence_length": 128,
+    "decode_tokens": 32,
+    "hidden_size": 64,
+    "num_hidden_layers": 1,
+    "num_attention_heads": 4,
+    "vocab_size": 256,
+    "logits_to_keep": 1,
+    "sdpa_config_enabled": true,
+    "sdpa_measurement": "prefill_sdpa_executed is measured with a non-timed call probe; timed calls do not include probe overhead",
+    "kv_cache_formula": "2 * layers * batch * cache_sequence_length * kv_heads * head_dim * dtype_bytes",
+    "cache_measurement": "sum(numel * element_size) across returned K/V tensors; allocator overhead excluded"
+  },
+  "results": [
+    {
+      "attention": "MHA",
+      "query_heads": 4,
+      "key_value_heads": 4,
+      "group_size": 1,
+      "parameter_count": 82144,
+      "prefill_sdpa_executed": true,
+      "prefill_latency_ms_mean": 0.4745037597604096,
+      "prefill_latency_ms_std": 0.027585850295231272,
+      "prefill_latency_ms_samples": [
+        0.4415937510202639,
+        0.4896020996966399,
+        0.46163749939296395,
+        0.4664249994675629,
+        0.5132604492246173
+      ],
+      "decode_cached_tokens_per_second_mean": 4133.18051512442,
+      "decode_cached_tokens_per_second_std": 176.39995626128103,
+      "decode_cached_tokens_per_second_samples": [
+        4243.258025488702,
+        4135.613481910732,
+        4023.702124328307,
+        3907.6614743830746,
+        4355.667469511284
+      ],
+      "decode_no_cache_tokens_per_second_mean": 1879.166122766949,
+      "decode_no_cache_tokens_per_second_std": 88.0160447807977,
+      "decode_no_cache_tokens_per_second_samples": [
+        1934.3773356948075,
+        1982.2526457564704,
+        1894.808522328116,
+        1761.0518960953148,
+        1823.3402139600366
+      ],
+      "cache_decode_speedup": 2.1994758553004257,
+      "kv_cache_sequence_length": 160,
+      "kv_cache_theoretical_bytes": 81920,
+      "kv_cache_tensor_payload_bytes": 81920,
+      "kv_cache_prefill_tensor_payload_bytes": 65536,
+      "cuda_peak_allocated_bytes": null
+    },
+    {
+      "attention": "GQA",
+      "query_heads": 4,
+      "key_value_heads": 2,
+      "group_size": 2,
+      "parameter_count": 78048,
+      "prefill_sdpa_executed": true,
+      "prefill_latency_ms_mean": 0.48033541010227054,
+      "prefill_latency_ms_std": 0.021022638267221845,
+      "prefill_latency_ms_samples": [
+        0.49040835001505917,
+        0.4559499997412786,
+        0.48099164996529,
+        0.5092770501505584,
+        0.4650500006391667
+      ],
+      "decode_cached_tokens_per_second_mean": 3660.560896526638,
+      "decode_cached_tokens_per_second_std": 341.429504178765,
+      "decode_cached_tokens_per_second_samples": [
+        3429.520668516833,
+        4078.0565512716335,
+        3825.958577002039,
+        3211.3601954322894,
+        3757.9084904103956
+      ],
+      "decode_no_cache_tokens_per_second_mean": 1478.8481024595874,
+      "decode_no_cache_tokens_per_second_std": 184.1243035709934,
+      "decode_no_cache_tokens_per_second_samples": [
+        1605.3444321833636,
+        1619.8875222345812,
+        1164.9159922601914,
+        1495.5687701475008,
+        1508.5237954723002
+      ],
+      "cache_decode_speedup": 2.4752784890067305,
+      "kv_cache_sequence_length": 160,
+      "kv_cache_theoretical_bytes": 40960,
+      "kv_cache_tensor_payload_bytes": 40960,
+      "kv_cache_prefill_tensor_payload_bytes": 32768,
+      "cuda_peak_allocated_bytes": null
+    },
+    {
+      "attention": "MQA",
+      "query_heads": 4,
+      "key_value_heads": 1,
+      "group_size": 4,
+      "parameter_count": 76000,
+      "prefill_sdpa_executed": true,
+      "prefill_latency_ms_mean": 0.5271079100202769,
+      "prefill_latency_ms_std": 0.026434359494241163,
+      "prefill_latency_ms_samples": [
+        0.5638957998598926,
+        0.5177291997824796,
+        0.49468750075902795,
+        0.5416583007900044,
+        0.5175687489099801
+      ],
+      "decode_cached_tokens_per_second_mean": 3713.703897851354,
+      "decode_cached_tokens_per_second_std": 498.5045859731875,
+      "decode_cached_tokens_per_second_samples": [
+        3846.2500077343966,
+        2871.865269188708,
+        4073.427617999902,
+        3691.93523351005,
+        4085.041360823715
+      ],
+      "decode_no_cache_tokens_per_second_mean": 1360.273659423964,
+      "decode_no_cache_tokens_per_second_std": 222.43935947885382,
+      "decode_no_cache_tokens_per_second_samples": [
+        1239.6393756339266,
+        1390.6996972755144,
+        1599.103862911077,
+        1525.0804248114798,
+        1046.844936487823
+      ],
+      "cache_decode_speedup": 2.730115276527518,
+      "kv_cache_sequence_length": 160,
+      "kv_cache_theoretical_bytes": 20480,
+      "kv_cache_tensor_payload_bytes": 20480,
+      "kv_cache_prefill_tensor_payload_bytes": 16384,
+      "cuda_peak_allocated_bytes": null
+    }
+  ]
+}
