@@ -15,19 +15,20 @@
 
 - **完整 LLM 生命周期**：实现 Byte-level BPE、Decoder-only Transformer、Pretrain、SFT、LoRA、DPO、PPO、GRPO、CLI 和 Gradio WebUI。
 - **模型核心组件**：RMSNorm、RoPE/YaRN、MHA/GQA/MQA、SwiGLU、Dense/MoE、严格 causal mask、左 padding 和 tied LM head。
-- **训练可靠性**：实现 token-weighted 梯度、AMP、梯度累积、cosine LR、原子 checkpoint、best/latest 模型和单进程精确断点续训。
+- **训练可靠性**：实现 token-weighted 梯度、AMP、梯度累积、cosine LR、原子 checkpoint、best/latest 模型和单进程/DDP 精确断点续训。
 - **数据与评估**：按训练后的真实 tensor 去重；用 SHA-256 做确定性分组切分，避免同 prompt 的不同回答跨 train/validation 泄漏。
 - **分布式训练**：支持 `torchrun`、DDP、`DistributedSampler`、`no_sync()`、跨 rank 指标归并和 rank-0 artifact/checkpoint。
 - **推理工程**：兼容 legacy、Dynamic 和 Static KV Cache；支持本地 `.pth`、LoRA adapter 和 Hugging Face directory。
-- **工程质量**：83 项 CPU 单元/回归测试、Ruff、GitHub Actions、真实训练 smoke、双进程 CPU/Gloo 验证和可复现实验 artifact。
+- **工程质量**：84 项 CPU 单元/回归测试、Ruff、GitHub Actions、真实训练 smoke、双进程 CPU/Gloo 验证和可复现实验 artifact。
 
 ## 可量化结果
 
 | 指标 | 结果 | 说明 |
 |---|---:|---|
-| 自动化测试 | **83 passed, 1 skipped** | 唯一 skip 为当前机器无 CUDA |
+| 自动化测试 | **84 passed, 1 skipped** | 唯一 skip 为当前机器无 CUDA |
 | 训练阶段 | **6** | Pretrain、SFT、LoRA、DPO、PPO、GRPO |
 | CPU DDP | **2 processes** | Pretrain、DPO、PPO、GRPO 已用 Gloo 实跑 |
+| DDP fault recovery | **exact match** | step 2 中断恢复后，step 4 模型/optimizer/scaler/逐 rank RNG 与连续训练一致 |
 | KV Cache decode 加速 | **2.20–2.73×** | tiny CPU benchmark，cache 对比 no-cache |
 | MQA KV payload | **减少 75%** | 相对 MHA：81,920 B → 20,480 B |
 | CPU convergence pilot | **490,752 params** | 50 epochs Pretrain + 100 epochs SFT |
@@ -36,6 +37,7 @@
 完整证据：
 
 - [CPU convergence pilot](artifacts/cpu_pilot.json)
+- [DDP fault-recovery verification](artifacts/ddp_resume.json)
 - [Attention benchmark JSON](artifacts/benchmark.json) / [CSV](artifacts/benchmark.csv)
 - [Training smoke artifact](artifacts/smoke_train.json)
 - [GitHub Actions workflow](.github/workflows/ci.yml)
@@ -109,15 +111,16 @@ Validation 输出：
 
 ### 3. 精确断点续训
 
-Pretrain、SFT 和 LoRA 的单进程 checkpoint 保存：
+Pretrain、SFT 和 LoRA 的单进程/DDP checkpoint 保存：
 
 - model、AdamW 和 AMP scaler state；
 - epoch、batch 和 optimizer-step cursor；
 - planned LR horizon；
-- Python、CPU，以及可用时的 CUDA/MPS RNG；
+- 每个 rank 独立的 Python、CPU，以及可用时的 CUDA/MPS RNG；
+- 每个 rank 的 in-epoch loss/token 累计与 batch cursor；
 - model config、tokenizer fingerprint、split 和训练参数。
 
-恢复时使用 `strict=True` 并校验完整 run identity。CPU 回归测试逐项比较连续训练与中断恢复后的模型、optimizer 和 RNG state。
+恢复时使用 `strict=True` 并校验完整 run identity 与 world size。故障注入回归会让两个 Gloo rank 在 optimizer step 2 保存后退出，再恢复到 step 4；最终模型、optimizer、scaler 和两条不同的 rank-local RNG 流与连续训练逐项一致。
 
 ### 4. Attention 与 KV Cache
 
@@ -164,9 +167,9 @@ uv run python scripts/smoke_train.py \
 
 | Stage | Entry point | 核心实现 | 精确 resume |
 |---|---|---|---|
-| Pretrain | `trainer/train_pretrain.py` | next-token prediction、全 token loss | 单进程支持 |
-| SFT | `trainer/train_sft.py` | assistant-only loss mask | 单进程支持 |
-| LoRA | `trainer/train_lora.py` | attention adapter、冻结基座、merge | 单进程支持 |
+| Pretrain | `trainer/train_pretrain.py` | next-token prediction、全 token loss | 单进程/DDP |
+| SFT | `trainer/train_sft.py` | assistant-only loss mask | 单进程/DDP |
+| LoRA | `trainer/train_lora.py` | attention adapter、冻结基座、merge | 单进程/DDP |
 | DPO | `trainer/train_dpo.py` | frozen reference、chosen/rejected log-prob | 暂不支持 |
 | PPO | `trainer/train_ppo.py` | critic、GAE、KL、clipped objective | 暂不支持 |
 | GRPO | `trainer/train_grpo.py` | group reward normalization、token KL | 暂不支持 |
@@ -278,7 +281,7 @@ uv run torchrun \
   --seed 42
 ```
 
-DDP resume 尚未实现；精确恢复需要保存每个 rank 独立的 RNG state。
+Pretrain、SFT 和 LoRA 支持使用相同 world size 做 DDP 精确恢复。checkpoint 保存每个 rank 独立的 RNG 与局部训练状态；`scripts/verify_ddp_resume.py` 提供可复现的双进程故障注入验证。
 
 ## 推理与 WebUI
 
@@ -314,7 +317,7 @@ WebUI 截图用于证明本地交互和流式推理链路，不代表模型回�
 
 ```text
 ruff check .                 All checks passed
-pytest -q                    83 passed, 1 skipped
+pytest -q                    84 passed, 1 skipped
 scripts/run_model.py         smoke inference OK
 scripts/smoke_train.py       Pretrain/SFT/LoRA/DPO pipeline OK
 torchrun + Gloo              2-process CPU DDP OK
@@ -329,6 +332,7 @@ torchrun + Gloo              2-process CPU DDP OK
 - deterministic split、去重和 prompt leakage 防护；
 - token-weighted gradient、validation 和 DDP metric reduction；
 - checkpoint 兼容性、RNG round-trip 和 exact resume；
+- 双进程 DDP 中断恢复与连续训练逐项一致性；
 - PPO GAE、generated-token mask、GRPO advantage；
 - CLI sampling、Unicode streaming 和 inference cache。
 
@@ -371,7 +375,7 @@ minimind_from_scratch/
 ├── inference.py                 # reusable streaming inference
 ├── main.py                      # CLI
 ├── webui.py                     # Gradio UI
-├── scripts/                     # tokenizer、evaluation、smoke、benchmark
+├── scripts/                     # tokenizer、evaluation、smoke、benchmark、DDP recovery
 ├── tests/                       # unit and regression tests
 ├── artifacts/                   # reproducible experiment evidence
 └── .github/workflows/ci.yml
@@ -382,7 +386,8 @@ minimind_from_scratch/
 - 当前提交的是训练系统和实验代码，不包含正式大模型 checkpoint。
 - PPO/GRPO 使用 toy containment reward，不等同于生产 reward model 或 AI judge。
 - 已验证单进程 CPU 和双进程 CPU/Gloo；CUDA AMP、NCCL 和多 GPU 尚未实跑。
-- 精确 resume 当前覆盖单进程 Pretrain、SFT 和 LoRA，不覆盖 DDP、DPO、PPO、GRPO。
+- 精确 resume 覆盖单进程和同 world size DDP 的 Pretrain、SFT、LoRA；不覆盖 DPO、PPO、GRPO。
+- DDP fault recovery 已验证双进程 CPU/Gloo；CUDA/NCCL 和 multi-node 尚未实跑。
 - benchmark 是 tiny CPU workload，只用于验证实现和相对关系。
 - AgentRL 当前包含 dataset schema，尚无 trainer、environment 或 tool executor。
 

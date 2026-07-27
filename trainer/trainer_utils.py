@@ -325,7 +325,7 @@ def add_train_args(parser, default_lr):
 
 
 def add_supervised_eval_args(parser):
-    """Add validation, artifact, and exact single-process resume options."""
+    """Add validation, artifact, and exact supervised-resume options."""
 
     parser.add_argument(
         "--validation_fraction",
@@ -510,9 +510,19 @@ def save_checkpoint(
     """Save model weights plus reproducibility metadata on rank zero.
 
     Returns ``True`` on the rank that wrote the file and ``False`` elsewhere.
-    ``load_weights`` remains compatible with the old raw ``state_dict`` files.
+    Every rank participates when ``training_state`` is supplied under DDP so
+    rank-local RNG and in-epoch metric state are preserved.
+    ``load_weights`` remains compatible with historical raw state dicts.
     """
 
+    resumable_v2 = training_state is not None
+    if resumable_v2 and (optimizer is None or scaler is None):
+        raise ValueError("resumable checkpoints require optimizer and scaler state")
+    rank_resume_states = None
+    if resumable_v2:
+        from trainer.checkpointing import gather_rank_resume_states
+
+        rank_resume_states = gather_rank_resume_states(training_state)
     if not is_main_process(context):
         return False
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -520,9 +530,6 @@ def save_checkpoint(
     config = config or getattr(base_model, "config", None)
     config_dict = config.to_dict() if hasattr(config, "to_dict") else config
     train_args = vars(args) if args is not None and hasattr(args, "__dict__") else args
-    resumable_v2 = training_state is not None and not (
-        context is not None and context.distributed
-    )
     format_version = 2 if resumable_v2 else 1
     payload: dict[str, Any] = {
         "format_version": format_version,
@@ -537,14 +544,25 @@ def save_checkpoint(
         payload["optimizer_state_dict"] = optimizer.state_dict()
     if scaler is not None:
         payload["scaler_state_dict"] = scaler.state_dict()
-    if training_state is not None:
-        payload["training_state"] = _plain_value(training_state)
     if resumable_v2:
-        from trainer.checkpointing import capture_rng_state
-
-        payload["rng_state"] = capture_rng_state()
-        payload["run_identity"] = _plain_value(training_state.get("run_identity", {}))
-        payload["world_size"] = 1
+        assert rank_resume_states is not None
+        training_states = [
+            _plain_value(state["training_state"]) for state in rank_resume_states
+        ]
+        rng_states = [state["rng_state"] for state in rank_resume_states]
+        identities = [state.get("run_identity", {}) for state in training_states]
+        if any(identity != identities[0] for identity in identities[1:]):
+            raise ValueError("all DDP ranks must share the same run identity")
+        payload["training_state"] = training_states[0]
+        payload["run_identity"] = identities[0]
+        payload["world_size"] = len(rank_resume_states)
+        if len(rank_resume_states) == 1:
+            payload["rng_state"] = rng_states[0]
+        else:
+            payload["rng_state_by_rank"] = rng_states
+            payload["training_state_by_rank"] = training_states
+    elif training_state is not None:
+        payload["training_state"] = _plain_value(training_state)
     if extra:
         payload["extra"] = _plain_value(extra)
     from trainer.checkpointing import atomic_torch_save
@@ -816,10 +834,6 @@ def train_supervised(
 
     resume_path = getattr(args, "resume", "")
     if resume_path:
-        if context.distributed:
-            raise RuntimeError(
-                "exact --resume is currently single-process only; use --init_from for DDP warm-start"
-            )
         from trainer.checkpointing import load_training_state
 
         restored = load_training_state(
@@ -875,8 +889,6 @@ def train_supervised(
         }
 
     def save(kind, state):
-        if not is_main_process(context):
-            return
         callback_kwargs = {
             "optimizer": optimizer,
             "scaler": scaler,
@@ -888,8 +900,11 @@ def train_supervised(
         except (TypeError, ValueError):
             # Preserve the historical one-argument callback for small embedded
             # callers. Such callbacks save weights only and cannot be resumed.
-            save_fn(unwrap_model(model))
+            if is_main_process(context):
+                save_fn(unwrap_model(model))
         else:
+            # Full callbacks run on every rank because resumable DDP saves
+            # collect rank-local RNG/progress before rank zero writes.
             save_fn(unwrap_model(model), **callback_kwargs)
 
     if validation_dataset is not None and not history and optimizer_step == 0:

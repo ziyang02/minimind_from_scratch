@@ -1,4 +1,4 @@
-"""Strict, single-process v2 checkpoints for exact training resumption.
+"""Strict v2 checkpoints for exact single-process and DDP training resumption.
 
 The existing project checkpoints intentionally remain useful as model-weight
 initializers.  This module defines a separate contract for ``--resume``:
@@ -6,9 +6,9 @@ checkpoints must contain model, optimizer, scaler, progress, run identity, and
 RNG state.  Raw state dicts and version-1 checkpoints are rejected with an
 explicit instruction to use ``--init_from`` instead.
 
-Only single-process RNG capture/restoration is implemented here.  A future DDP
-integration must gather one RNG state per rank and restore the state belonging
-to the current rank; silently reusing rank zero's state would be incorrect.
+Distributed checkpoints keep one RNG state and one in-epoch progress state per
+rank. Model, optimizer, scaler, shared history, and run identity remain common
+and are written once by rank zero.
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ _REQUIRED_PAYLOAD_KEYS = {
     "model_state_dict",
     "optimizer_state_dict",
     "scaler_state_dict",
-    "rng_state",
     "training_state",
 }
 _REQUIRED_TRAINING_STATE_KEYS = {
@@ -69,12 +68,27 @@ def _world_size() -> int:
         raise ResumeCheckpointError("WORLD_SIZE must be an integer") from exc
 
 
+def _rank() -> int:
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_rank()
+    try:
+        rank = int(os.environ.get("RANK", "0"))
+    except ValueError as exc:
+        raise ResumeCheckpointError("RANK must be an integer") from exc
+    world_size = _world_size()
+    if not 0 <= rank < world_size:
+        raise ResumeCheckpointError(
+            f"RANK must be in [0, WORLD_SIZE), got {rank}/{world_size}"
+        )
+    return rank
+
+
 def _require_single_process(operation: str) -> None:
     world_size = _world_size()
     if world_size != 1:
         raise ResumeCheckpointError(
-            f"{operation} currently supports only single-process training; "
-            "DDP resume requires one captured RNG state per rank"
+            f"{operation} is a single-process convenience; distributed trainers "
+            "must gather rank-local state before rank zero writes"
         )
 
 
@@ -85,7 +99,6 @@ def capture_rng_state() -> dict[str, Any]:
     by ``torch.load(..., weights_only=True)``.
     """
 
-    _require_single_process("RNG capture")
     cuda_states: list[torch.Tensor] = []
     if torch.cuda.is_available():
         cuda_states = [state.cpu().clone() for state in torch.cuda.get_rng_state_all()]
@@ -174,7 +187,6 @@ def restore_rng_state(
     would make a purported exact resume nondeterministic.
     """
 
-    _require_single_process("RNG restoration")
     target_device = torch.device(device)
     python_state, cpu_state, cuda_states, mps_state = _validate_rng_state(
         state,
@@ -266,6 +278,55 @@ def _validated_training_state(state: Mapping[str, Any]) -> dict[str, Any]:
     return validated
 
 
+def gather_rank_resume_states(
+    training_state: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Collect rank-local RNG and progress at a shared optimizer boundary.
+
+    All ranks must call this function. The complete list is returned on every
+    worker so rank zero can write one payload while failures remain visible to
+    the whole process group.
+    """
+
+    local_state = {
+        "rng_state": capture_rng_state(),
+        "training_state": _validated_training_state(training_state),
+    }
+    world_size = _world_size()
+    if world_size == 1:
+        return [local_state]
+    if not dist.is_available() or not dist.is_initialized():
+        raise ResumeCheckpointError(
+            "distributed checkpoint capture requires an initialized process group"
+        )
+
+    gathered: list[Any] = [None] * world_size
+    dist.all_gather_object(gathered, local_state)
+    validated = []
+    for rank, state in enumerate(gathered):
+        if not isinstance(state, Mapping):
+            raise IncompleteCheckpointError(
+                f"rank {rank} resume state must be a mapping"
+            )
+        rng_state = state.get("rng_state")
+        progress = state.get("training_state")
+        if not isinstance(rng_state, Mapping):
+            raise IncompleteCheckpointError(
+                f"rank {rank} RNG state must be a mapping"
+            )
+        if not isinstance(progress, Mapping):
+            raise IncompleteCheckpointError(
+                f"rank {rank} training state must be a mapping"
+            )
+        validated.append(
+            {
+                "rng_state": dict(rng_state),
+                "training_state": _validated_training_state(progress),
+            }
+        )
+    return validated
+
+
 def build_training_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
@@ -278,8 +339,9 @@ def build_training_checkpoint(
 ) -> dict[str, Any]:
     """Build a complete v2 payload without writing it.
 
-    Callers must pass an unwrapped model.  DDP support will require coordinated
-    all-rank RNG collection and is deliberately rejected for now.
+    Callers must pass an unwrapped model. This low-level builder remains a
+    single-process convenience; distributed trainers first collect rank-local
+    state with :func:`gather_rank_resume_states`.
     """
 
     _require_single_process("v2 checkpoint construction")
@@ -373,7 +435,59 @@ def _load_payload(path: str | os.PathLike[str]) -> Mapping[str, Any]:
         raise IncompleteCheckpointError(
             "v2 checkpoint is incomplete; missing: " + ", ".join(sorted(missing))
         )
+    world_size = payload.get("world_size")
+    if isinstance(world_size, bool) or not isinstance(world_size, int) or world_size < 1:
+        raise IncompleteCheckpointError(
+            "checkpoint world_size must be a positive integer"
+        )
+    if world_size == 1:
+        if not isinstance(payload.get("rng_state"), Mapping):
+            raise IncompleteCheckpointError(
+                "single-process checkpoint rng_state must be a mapping"
+            )
+    else:
+        rng_states = payload.get("rng_state_by_rank")
+        training_states = payload.get("training_state_by_rank")
+        if not isinstance(rng_states, (list, tuple)) or len(rng_states) != world_size:
+            raise IncompleteCheckpointError(
+                "distributed checkpoint rng_state_by_rank must contain one state per rank"
+            )
+        if (
+            not isinstance(training_states, (list, tuple))
+            or len(training_states) != world_size
+        ):
+            raise IncompleteCheckpointError(
+                "distributed checkpoint training_state_by_rank must contain "
+                "one state per rank"
+            )
     return payload
+
+
+def _rank_resume_state(
+    payload: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    checkpoint_world_size = int(payload["world_size"])
+    runtime_world_size = _world_size()
+    runtime_rank = _rank()
+    if checkpoint_world_size != runtime_world_size:
+        raise CheckpointCompatibilityError(
+            "checkpoint world size mismatch: "
+            f"checkpoint={checkpoint_world_size} current={runtime_world_size}"
+        )
+    if checkpoint_world_size == 1:
+        return payload["rng_state"], payload["training_state"]
+
+    rng_state = payload["rng_state_by_rank"][runtime_rank]
+    training_state = payload["training_state_by_rank"][runtime_rank]
+    if not isinstance(rng_state, Mapping):
+        raise IncompleteCheckpointError(
+            f"checkpoint RNG state for rank {runtime_rank} must be a mapping"
+        )
+    if not isinstance(training_state, Mapping):
+        raise IncompleteCheckpointError(
+            f"checkpoint training state for rank {runtime_rank} must be a mapping"
+        )
+    return rng_state, training_state
 
 
 def load_training_state(
@@ -392,7 +506,6 @@ def load_training_state(
     moved from the CPU load location to the requested runtime device.
     """
 
-    _require_single_process("v2 checkpoint loading")
     target_device = torch.device(device)
     payload = _load_payload(path)
 
@@ -413,16 +526,10 @@ def load_training_state(
             "checkpoint run identity mismatch: "
             f"expected {normalized_expected!r}, got {normalized_actual!r}"
         )
-    if payload["world_size"] != 1:
-        raise CheckpointCompatibilityError(
-            "this loader supports only single-process checkpoints (world_size=1)"
-        )
-
     model_state = payload["model_state_dict"]
     optimizer_state = payload["optimizer_state_dict"]
     scaler_state = payload["scaler_state_dict"]
-    rng_state = payload["rng_state"]
-    training_state = payload["training_state"]
+    rng_state, training_state = _rank_resume_state(payload)
     if not isinstance(model_state, Mapping):
         raise IncompleteCheckpointError("checkpoint model_state_dict must be a mapping")
     if not isinstance(optimizer_state, Mapping):
@@ -434,6 +541,11 @@ def load_training_state(
     if not isinstance(training_state, Mapping):
         raise IncompleteCheckpointError("checkpoint training_state must be a mapping")
     validated_state = _validated_training_state(training_state)
+    local_identity = validated_state.get("run_identity")
+    if local_identity is not None and _plain_identity(local_identity) != normalized_expected:
+        raise CheckpointCompatibilityError(
+            f"checkpoint rank {_rank()} training state has a mismatched run identity"
+        )
     _validate_rng_state(rng_state, target_device)
     if scaler is None or not hasattr(scaler, "load_state_dict"):
         raise TypeError("scaler must provide state_dict/load_state_dict")

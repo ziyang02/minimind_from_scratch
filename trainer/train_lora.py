@@ -22,6 +22,7 @@ from trainer.trainer_utils import (
     add_train_args,
     build_model,
     cleanup_distributed,
+    is_main_process,
     load_weights,
     rank0_print,
     save_checkpoint,
@@ -99,7 +100,7 @@ def main():
             if kind != "best":
                 # Preserve the resumable state first. If adapter serialization
                 # then fails, --resume can deterministically regenerate it.
-                save_checkpoint(
+                wrote_checkpoint = save_checkpoint(
                     training_path,
                     trained_model,
                     config=config,
@@ -118,6 +119,10 @@ def main():
                     },
                     context=context,
                 )
+                if not wrote_checkpoint:
+                    return
+            elif not is_main_process(context):
+                return
             save_lora(
                 trained_model,
                 adapter_path,

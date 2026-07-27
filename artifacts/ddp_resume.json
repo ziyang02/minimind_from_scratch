@@ -1,0 +1,44 @@
+{
+  "schema": "ninjamind.ddp_resume_verification",
+  "schema_version": 1,
+  "created_at": "2026-07-27T06:44:08.388392+00:00",
+  "environment": {
+    "python": "3.12.7",
+    "pytorch": "2.12.1",
+    "platform": "macOS-15.7.4-arm64-arm-64bit",
+    "device": "cpu",
+    "backend": "gloo",
+    "world_size": 2
+  },
+  "experiment": {
+    "planned_optimizer_steps": 4,
+    "fault_after_optimizer_step": 2,
+    "resume_checkpoint": "interrupted_step_2.pth",
+    "continuous_checkpoint": "continuous_step_4.pth",
+    "resumed_checkpoint": "resumed_step_4.pth"
+  },
+  "checkpoint": {
+    "format_version": 2,
+    "world_size": 2,
+    "rank_rng_states": 2,
+    "rank_training_states": 2,
+    "rank_rng_streams_distinct": true
+  },
+  "checks": {
+    "model_state_exact": true,
+    "optimizer_state_exact": true,
+    "scaler_state_exact": true,
+    "rank_rng_states_exact": true
+  },
+  "hashes": {
+    "model_state_dict": "09030e79e03a95104c0d0e987a93650355746a4f90a7231b8b45f9367ea6627f",
+    "optimizer_state_dict": "7b24322c91ffeb6654128af8bc2517607e67688b8c891a9db53130cb739dc27d",
+    "scaler_state_dict": "7b6bbfc035aeac78f3ee425960893ff8bb7927d3cf3425470ac4b6c6ce280c5d",
+    "rng_state_by_rank": "8aa59a35f760bd9998ce137255acad6b8bf4831c58cd8085aafaccbc7cd71a81"
+  },
+  "limitations": [
+    "This fixture validates two-process CPU/Gloo training.",
+    "CUDA/NCCL and multi-node recovery require separate hardware validation.",
+    "Exact resume requires the same world size and run identity."
+  ]
+}
