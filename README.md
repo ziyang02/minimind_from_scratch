@@ -1,5 +1,8 @@
 # MiniMind from Scratch（NinjaMind）
 
+[![CI](https://github.com/ziyang02/minimind_from_scratch/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/ziyang02/minimind_from_scratch/actions/workflows/ci.yml?query=branch%3Amaster)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+
 一个面向学习与 MLE 工程实践的、可测试且可复现的 Decoder-only Transformer 项目：从 Byte-level BPE、预训练、SFT/LoRA，到 DPO/PPO/GRPO、KV Cache 推理、DDP 和可复现实验，尽量用小而完整的代码串起 LLM 生命周期。
 
 > **先说明边界：**这是教学与工程复现项目，不是已经训练好的可用大模型，也不声称发明了 Transformer、LoRA、DPO、PPO 或 GRPO。artifact 记录的 tiny 模型只训练了 2 个 optimizer step，生成结果已经退化，不能用于证明回答质量。
@@ -13,14 +16,14 @@
 | Decoder-only Transformer | 已实现 | RMSNorm、RoPE/可选 YaRN、MHA/GQA/MQA、SwiGLU、严格 causal mask、左 padding、Dense/MoE 均有 CPU 测试 |
 | Hugging Face 接口 | 已实现 | `PreTrainedModel`、`GenerationMixin`、legacy/Dynamic/Static KV Cache，以及 HF 本地目录保存/回读 logits round-trip 已测试 |
 | Tokenizer 与数据集 | 已实现 | Byte-level BPE、ChatML 风格模板、Pretrain/SFT/DPO/RLAIF/AgentRL dataset；AgentRL 目前只有 dataset，没有 trainer |
-| Pretrain / SFT / LoRA / DPO | 已实现 | 仓库内 demo 数据的 2-step CPU smoke 已完成并保存真实 artifact |
+| Pretrain / SFT / LoRA / DPO | 已实现 | Pretrain/SFT/LoRA 支持去重分组切分、token-weighted validation、曲线 artifact 与单进程 CPU 精确 resume 回归；DPO 训练链路已验证但尚无精确 resume |
 | PPO / GRPO | 已实现实验版 | reference policy、KL、generated-token mask、GAE/group advantage 已测试；reward 仍是 toy containment rule |
 | torchrun / DDP | 已实现 | 双进程 CPU/Gloo 已实际跑通 Pretrain、DPO、PPO、GRPO；CUDA/NCCL 与双 GPU 性能未验证 |
 | 流式推理 CLI | 已实现 | 本地随机模型 smoke、base/SFT/LoRA `.pth`、本地 HF 目录、KV Cache/no-cache 路径 |
 | Gradio WebUI | 已实现，本地链路已验证 | CPU 浏览器中完成一次 prompt/streamed response 并保存截图；未做部署、并发或稳定性验收 |
-| 测试与 CI | 已实现 | 2026-07-22 本地 `ruff` 通过、`43 passed`；GitHub Actions 尚未在远端 runner 实际触发 |
+| 测试与 CI | 已实现 | 2026-07-27 当前工作区 `ruff` 通过、`83 passed, 1 CUDA skip`；`master` 的 GitHub Actions 已在远端通过 |
 | Attention benchmark | 已实现 | MHA/GQA/MQA + cache/no-cache 的 tiny CPU benchmark 已运行；没有 CUDA 数据 |
-| 长训练与模型质量 | 未完成 | 没有 validation loss、perplexity、下游准确率或可用 checkpoint |
+| 长训练与模型质量 | 部分完成 | 已有 validation CE/perplexity、best/latest checkpoint、曲线、held-out SFT generation EM 工具及 0.49M 参数 CPU convergence pilot；尚无正式长训练、可信准确率或可用模型 |
 
 ## Pipeline
 
@@ -138,7 +141,7 @@ uv run python trainer/train_pretrain.py \
   --seed 42
 ```
 
-输出：`out/demo/pretrain_32.pth`。
+输出：latest/resumable `out/demo/pretrain_32.pth`、compact best validation `out/demo/pretrain_32_best.pth`，以及 `out/demo/metrics/pretrain_*` 指标文件。
 
 ### 2. SFT
 
@@ -162,7 +165,25 @@ uv run python trainer/train_sft.py \
   --seed 42
 ```
 
-输出：`out/demo/full_sft_32.pth`。
+输出：latest/resumable `out/demo/full_sft_32.pth`、compact best validation `out/demo/full_sft_32_best.pth`，以及 `out/demo/metrics/sft_*` 指标文件。
+
+训练后应同时检查 held-out generation，而不只看 teacher-forced CE。下面的命令复用训练时完全相同的数据、validation fraction 和 split seed，只评估每条留出对话最后一个 assistant target：
+
+```bash
+uv run python scripts/evaluate_sft.py \
+  --checkpoint out/demo/full_sft_32_best.pth \
+  --tokenizer-dir tokenizer \
+  --data dataset/demo/sft_demo.jsonl \
+  --max-length 96 \
+  --validation-fraction 0.1 \
+  --split-seed 42 \
+  --device cpu \
+  --max-new-tokens 64 \
+  --limit 0 \
+  --output out/demo/metrics/sft_generation_evaluation.json
+```
+
+评估的 `--data`、`--max-length`、validation fraction、split seed 和 tokenizer 必须与训练一致。它固定使用 greedy decoding，并输出 strict exact match 与保守 normalized exact match；后者只统一 Unicode NFC、换行编码和首尾空白，不放宽大小写、标点、内部空格或数字表达。`--limit 0` 表示评估全部留出样本；`max_new_tokens` 截短 target 会记为不匹配。当前 CLI 接收完整 Pretrain/SFT checkpoint，不直接接收 LoRA-only adapter。
 
 ### 3. LoRA
 
@@ -188,7 +209,7 @@ uv run python trainer/train_lora.py \
   --seed 42
 ```
 
-输出：`out/demo/lora_32.pth`。adapter checkpoint 保存 rank、alpha、targets、基座路径和训练参数；代码也支持把 LoRA 合并回基座权重。
+输出：推理 adapter `out/demo/lora_32.pth`、best adapter `out/demo/lora_32_best.pth`，以及用于精确续训的完整状态 `out/demo/lora_32_train.pth`。adapter checkpoint 保存 rank、alpha、targets、基座路径和训练参数；代码也支持把 LoRA 合并回基座权重。
 
 ### 4. DPO
 
@@ -282,7 +303,49 @@ uv run python scripts/download_dataset.py
 uv run python scripts/download_dataset.py --files dpo.jsonl rlaif.jsonl
 ```
 
-下载源为 [jingyaogong/minimind_dataset](https://huggingface.co/datasets/jingyaogong/minimind_dataset)。正式数据不会提交到本仓库。
+下载源为 [jingyaogong/minimind_dataset](https://huggingface.co/datasets/jingyaogong/minimind_dataset)。正式数据不会提交到本仓库。该数据集卡同时列出 Apache-2.0 与 CC-BY-NC-2.0，且数据来自多个来源；这不表示每个文件都可任选 Apache-2.0。使用正式数据前应核对具体文件及原始来源，未确认更宽松的文件级授权前按署名、非商业限制保守处理。
+
+## Validation、训练曲线与断点续训
+
+Pretrain/SFT/LoRA 默认执行 `--validation_fraction 0.1`。切分前会按训练实际消费的字段精确去重；SFT 会把相同角色/非 assistant 内容对话骨架下的不同 assistant 内容放在同一侧，避免 prompt 泄漏。切分由 SHA-256 与 seed 决定，不依赖 JSONL 行顺序或进程全局 RNG。fraction 按完整 group 选择最接近的比例，因此实际比例可能与请求值略有差异；正 fraction 至少需要两个 unique group。当前 demo 的实际结果是：Pretrain `300 raw → 185 unique → 167 train / 18 validation`，SFT `100 → 90 / 10`。传 `--validation_fraction 0` 可关闭 validation，但仍会去重。
+
+Validation CE 按所有有效 target token 的 NLL 总和/数量计算，不平均 batch loss；perplexity 为该纯 CE 的指数，不混入 MoE router auxiliary loss。每次运行会原子更新：
+
+```text
+OUT_DIR/metrics/pretrain_metrics.json
+OUT_DIR/metrics/pretrain_metrics.csv
+OUT_DIR/metrics/pretrain_ce.svg
+```
+
+SFT/LoRA 使用相同命名规则。JSON 包含 split fingerprint、训练参数、模型配置和 epoch 0/各 epoch 指标；CSV 与 JSON history 对齐，SVG 同时显示 train/validation CE。
+
+单进程 Pretrain/SFT 的 latest checkpoint 与 LoRA 的 `*_train.pth` 是 `format_version=2` 完整训练状态，包含模型、AdamW、AMP scaler、epoch/batch cursor、原始 LR horizon、Python/CPU RNG，以及硬件可用时的 MPS/所有可见 CUDA generator 状态。长任务建议增加 `--save_interval N`，中断后使用**完全相同**的 stage、模型、tokenizer、数据切分、max length、LR/grad clip、device、batch、accumulation、seed、epochs/max_steps 参数，并额外传 `--resume`：
+
+```bash
+uv run python trainer/train_pretrain.py \
+  --data_path dataset/demo/pretrain_demo.jsonl \
+  --out_dir out/resume_demo \
+  --epochs 10 \
+  --batch_size 4 \
+  --save_interval 50 \
+  --device cpu
+
+# 中断后；其他训练参数必须保持相同
+uv run python trainer/train_pretrain.py \
+  --data_path dataset/demo/pretrain_demo.jsonl \
+  --out_dir out/resume_demo \
+  --epochs 10 \
+  --batch_size 4 \
+  --save_interval 50 \
+  --device cpu \
+  --resume out/resume_demo/pretrain_512.pth
+```
+
+`--init_from` 表示只加载权重并开始新阶段，`--resume` 表示严格恢复同一训练运行；raw/v1 checkpoint（包括 compact `_best.pth`）用于 `--resume` 会明确报错。关闭 validation 时不会生成 best；若训练后 validation CE 没改善，best 也可能是 epoch 0 baseline。当前精确 resume 实现支持单进程 CPU/CUDA/MPS：CPU 已有连续/中断状态逐项一致回归，MPS RNG 路径有接口回归但尚无可用 MPS 硬件实跑，CUDA RNG 测试因当前机器无 CUDA 而跳过。跨 PyTorch 版本、硬件或算子实现不承诺 bitwise 一致。DDP 与 DPO/PPO/GRPO 仍只支持权重初始化或阶段末 checkpoint，不能声称精确续训。
+
+## 什么时候需要租 GPU
+
+当前 demo、测试、数据切分、指标评估和亚百万参数本地 pilot 都不需要租卡；先用 CPU 把数据质量、留出集 EM 和 checkpoint 路径跑对。只有在换成更大且完成许可审查的数据、准备多 epoch 正式训练时，才建议先短租一张 16–24GB GPU 做 CUDA/AMP smoke，确认显存、吞吐和恢复后再延长租期。GPU 只能缩短训练时间，不能修复小样本重复、标签单一或验证 EM 偏低的问题。
 
 ## torchrun / DDP
 
@@ -426,19 +489,33 @@ uv run python scripts/smoke_train.py \
   --artifact /tmp/smoke_train.json
 ```
 
-2026-07-22 在当前工作区的最新本地结果：
+2026-07-27 在当前工作区的最新本地结果：
 
 ```text
 ruff check .                 All checks passed!
-pytest -q                    43 passed in 2.10s
+pytest -q                    83 passed, 1 skipped
 python scripts/run_model.py  smoke inference OK
 ```
 
-测试覆盖 RMSNorm、causal/left-padding mask、GQA、legacy/Dynamic/Static KV Cache、HF directory round-trip、Dense/MoE 与 padding-aware router loss、SFT response-preserving truncation、DPO shared-prompt truncation/mask、RL 左截断、LoRA 保存/加载/合并、DPO loss 与 DDP 全局 metric reduction、PPO GAE/generated mask/reward、GRPO advantage、DDP 参数/单进程回退、尾 batch/尾 accumulation、checkpoint 兼容、Unicode token streaming 和推理采样。
+测试覆盖 RMSNorm、causal/left-padding mask、GQA、legacy/Dynamic/Static KV Cache、HF directory round-trip、Dense/MoE 与 padding-aware router loss、SFT response-preserving truncation、DPO shared-prompt truncation/mask、RL 左截断、LoRA 原子保存/加载/合并、截断后训练张量去重与无泄漏 deterministic split、全局 token-weighted 梯度/validation/perplexity、DDP lazy buffer 回归、JSON/CSV/SVG 原子 artifact、held-out SFT greedy generation evaluator、v2 checkpoint、模型/Adam/RNG 精确 resume 对照、DPO loss 与 DDP 全局 metric reduction、PPO GAE/generated mask/reward、GRPO advantage、DDP 参数/单进程回退、尾 batch/尾 accumulation、Unicode token streaming 和推理采样。唯一 skip 是当前机器没有 CUDA，CUDA RNG round-trip 测试未执行。
 
-`.github/workflows/ci.yml` 会在 push/PR 上执行安装、ruff、pytest、CPU inference smoke 和 training pipeline smoke；该 workflow 文件已创建，但当前尚无远端 runner 成功记录，因此不能把本地通过等同于 CI 已通过。
+`.github/workflows/ci.yml` 会在 push/PR 上执行安装、ruff、pytest、CPU inference smoke 和 training pipeline smoke；`master` 的远端 GitHub Actions 已于 2026-07-22 通过。README 顶部 badge 会显示该 workflow 的当前状态。
 
 ## 可复现实验与真实结果
+
+### 0.49M CPU convergence pilot
+
+来源：[cpu_pilot.json](artifacts/cpu_pilot.json)
+
+2026-07-27 在 macOS arm64 CPU、PyTorch 2.12.1、seed 42 上运行 hidden size 128、2 layers、4 query heads、2 KV heads、vocab 372 的 490,752 参数模型。Pretrain 使用 50 epochs、batch 32、LR `1e-3`；SFT 从 best pretrain checkpoint 开始，使用 100 epochs、batch 16、LR `5e-4`。训练权重保存在临时目录且未提交。
+
+| Stage/checkpoint | Optimizer steps | Best validation CE | Latest validation CE | Held-out generation EM |
+|---|---:|---:|---:|---:|
+| Pretrain | 300 | 0.5482（epoch 24） | 0.6208 | — |
+| SFT best-by-CE | 600 | 0.3348（epoch 30） | — | 5/10 |
+| SFT latest | 600 | — | 0.3508 | 6/10 |
+
+该 pilot 证明完整 CPU 训练、validation、best/latest 选择和 held-out greedy evaluator 能在非 smoke 步数下共同工作，也显示 teacher-forced CE 最优点不一定对应 generation EM 最优点。它不能作为可信泛化或可用模型证据：demo 只有 100 条结构一致的加法 SFT，pretrain 也覆盖同一算术领域，留出集仅 10 条，且 latest 仍有 4 条算错。
 
 ### 2-step CPU training smoke
 
@@ -528,9 +605,10 @@ SFT/DPO 的 loss mask 只覆盖 assistant response；过长 SFT 会从左侧保�
 ## Checkpoint 约定
 
 - Full-model checkpoint 名称为 `{stage}_{hidden_size}[_moe].pth`，例如 `pretrain_32.pth`、`full_sft_32.pth`、`dpo_32.pth`。
-- 新格式包含 `format_version`、`model_state_dict`、model config、tokenizer metadata、training args、stage/step；需要时还包含 optimizer state 和 reference checkpoint 信息。
+- 单进程 Pretrain/SFT 的 `format_version=2` checkpoint 包含模型、optimizer、scaler、训练 cursor、planned LR horizon、run identity 与 RNG；恢复时校验 stage、完整模型 config、tokenizer fingerprint、split、max length、LR/grad clip、batch/accumulation、seed 与训练 horizon，模型使用 `strict=True`。
+- `--save_interval` 只在 optimizer boundary 保存；latest 使用常规文件名。`_best.pth` 是 compact `format_version=1` 推理/`--init_from` 权重，不能用于 `--resume`；手动 cosine schedule 通过恢复 optimizer step 与原 planned total steps 保持连续。
 - `load_weights()` 与推理 loader 兼容旧的裸 `state_dict`；历史 raw checkpoint 无完整 config 时，可能需要显式传入正确的 attention head 参数。
-- LoRA checkpoint 只保存 adapter tensor，并附带 rank/alpha/targets 与基座 metadata；加载时必须同时提供 base/SFT checkpoint。
+- LoRA 推理 checkpoint 只保存 adapter tensor，并附带 rank/alpha/targets 与基座 metadata；`*_train.pth` 另存完整可续训状态。加载 adapter 推理时仍必须同时提供 base/SFT checkpoint。
 - 本地 Hugging Face directory 也可用于推理，RoPE derived buffer 会在首次 forward 重建。
 - `out/` 已加入 `.gitignore`。不要提交正式模型权重、optimizer checkpoint、大数据集、API key 或 `.env`。
 
@@ -546,6 +624,8 @@ minimind_from_scratch/
 │   └── demo/                    # 可提交的小型 JSONL
 ├── trainer/
 │   ├── trainer_utils.py         # AMP、DDP、累积、checkpoint、GAE
+│   ├── checkpointing.py         # 原子 v2 checkpoint 与严格 resume
+│   ├── artifacts.py             # JSON/CSV/SVG 训练指标
 │   ├── train_pretrain.py
 │   ├── train_sft.py
 │   ├── train_lora.py
@@ -560,26 +640,35 @@ minimind_from_scratch/
 │   ├── download_dataset.py
 │   ├── run_model.py
 │   ├── smoke_train.py
+│   ├── evaluate_sft.py           # 留出集 greedy generation exact match
 │   └── benchmark_attention.py
 ├── tests/                       # CPU unit/regression tests
 ├── artifacts/                   # JSON/CSV/PNG/SVG 真实小实验产物
+├── LICENSE                      # Apache License 2.0（仅覆盖本仓库软件）
 └── .github/workflows/ci.yml
 ```
 
 ## 已知限制
 
-1. **没有可用模型质量。** 当前无长训练、validation/perplexity/accuracy；2-step 模型生成连续换行，不能用作 demo 回答能力。
+1. **没有可用模型质量。** Validation、held-out generation EM 和 0.49M 参数 CPU convergence pilot 已经完成，但当前仍无正式长训练、可信正式准确率或可用 checkpoint；pilot 在 10 条留出样本上只有 60% EM，历史 2-step 模型则生成连续换行。
 2. **PPO/GRPO reward 是 toy rule。** 它只检查参考答案是否出现在 completion 中，不等同于 learned reward model、AI judge 或生产 RLHF/RLAIF。
 3. **GPU 未验证。** 只验证了单进程 CPU 和双进程 CPU/Gloo；CUDA AMP、NCCL、双 GPU correctness/吞吐/显存均待验证。
 4. **WebUI 只做了最小本地浏览器验证。** 没有并发、长会话、错误恢复、部署或鉴权测试；截图中的短输出不能作为模型质量证据。
-5. **CI 尚无远端记录。** workflow 已存在，但目前只能报告本地 lint/test/smoke 结果。
+5. **CI 范围仍限 CPU。** 远端 workflow 已通过，但不覆盖 CUDA/NCCL、多 GPU、长训练或模型质量。
 6. **Benchmark 很小且依赖机器。** 只能说明当前 CPU workload；不能声称 GQA/MQA 普遍更快或给出 GPU 显存收益。
 7. **AgentRL 不完整。** 有 dataset schema，没有对应 trainer、environment 或 tool executor。
 8. **Artifact 来自 dirty worktree。** JSON 保留 commit/environment，但不是已发布 tag 的结果；正式报告应在 clean commit 上重跑。
-9. **仓库当前没有 LICENSE 文件。** 对外发布或复用前应补齐本仓库许可证，并分别核对上游代码与数据许可。
+9. **正式数据与训练权重尚未完成商业用途许可审查。** 软件的 Apache-2.0 许可证不自动覆盖外部数据，也不对训练权重的许可状态作出判断。
+10. **精确 resume 范围有限。** 当前只支持单进程 CPU/CUDA/MPS 上的 Pretrain/SFT/LoRA，实际逐项一致训练回归只跑过 CPU，MPS 仅验证 RNG 接口路径，CUDA 当前跳过；DDP 需要逐 rank RNG，DPO/PPO/GRPO 还需要稳定 reference，PPO 还必须持久化 critic，均未假装已经支持。
 
 ## 参考、归属与致谢
 
 本项目参考 [jingyaogong/minimind](https://github.com/jingyaogong/minimind) 的“小型语言模型全流程”方向、训练阶段命名和公开数据格式，并使用其 [MiniMind dataset](https://huggingface.co/datasets/jingyaogong/minimind_dataset) 作为正式数据下载源；感谢原项目作者和贡献者。
 
 本仓库是在自身 git 历史上迭代的个人学习/工程实现，没有复制外部仓库覆盖代码。个人实现与本轮工程化范围包括：Transformer/cache/mask/MoE 修复，LoRA/DPO/PPO/GRPO trainer，DDP 与 checkpoint 设施，数据 mask，流式 CLI/WebUI，CPU 测试、smoke pipeline 和 attention benchmark。底层算法均来自公开研究与社区实践，本项目不主张算法原创性，也不隶属于或代表原 MiniMind 项目。
+
+## 许可证与数据使用边界
+
+本仓库的软件源码以 [Apache License 2.0](LICENSE) 发布。上游 [MiniMind](https://github.com/jingyaogong/minimind) 同样采用 [Apache License 2.0](https://github.com/jingyaogong/minimind/blob/master/LICENSE)。
+
+本仓库的软件许可证不会重新许可外部数据、下载得到的 checkpoint 或训练权重。[MiniMind dataset 数据集卡](https://huggingface.co/datasets/jingyaogong/minimind_dataset) 同时标记 Apache-2.0 与 CC-BY-NC-2.0，并说明数据汇集自多个来源；使用者应记录具体文件、版本/commit、原始来源及其许可证。在完成逐来源审查前，不应据此声称正式数据或训练产物可用于商业用途。

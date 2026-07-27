@@ -3,6 +3,8 @@ name = "minimind-from-scratch"
 version = "0.1.0"
 description = "A reproducible decoder-only Transformer training stack for learning LLM systems end to end"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.26",
@@ -33,7 +35,7 @@ ninjamind = "main:main"
 ninjamind-web = "webui:main"
 
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

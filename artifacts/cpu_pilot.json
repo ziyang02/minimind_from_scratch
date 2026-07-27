@@ -1,0 +1,205 @@
+{
+  "schema": "ninjamind.cpu_pilot",
+  "schema_version": 1,
+  "created_at": "2026-07-27T06:13:56Z",
+  "git_commit": "d7c95f6",
+  "git_dirty": true,
+  "environment": {
+    "python": "3.12.7",
+    "pytorch": "2.12.1",
+    "platform": "macOS-15.7.4-arm64-arm-64bit",
+    "device": "cpu",
+    "cuda_available": false,
+    "mps_available": false
+  },
+  "model": {
+    "parameters": 490752,
+    "hidden_size": 128,
+    "num_hidden_layers": 2,
+    "num_attention_heads": 4,
+    "num_key_value_heads": 2,
+    "vocab_size": 372,
+    "max_length": 96
+  },
+  "pretrain": {
+    "command": [
+      ".venv/bin/python",
+      "trainer/train_pretrain.py",
+      "--data_path",
+      "dataset/demo/pretrain_demo.jsonl",
+      "--tokenizer_dir",
+      "tokenizer",
+      "--out_dir",
+      "/tmp/minimind-cpu-pilot",
+      "--hidden_size",
+      "128",
+      "--num_hidden_layers",
+      "2",
+      "--num_attention_heads",
+      "4",
+      "--num_key_value_heads",
+      "2",
+      "--max_length",
+      "96",
+      "--epochs",
+      "50",
+      "--batch_size",
+      "32",
+      "--lr",
+      "0.001",
+      "--log_interval",
+      "50",
+      "--save_interval",
+      "100",
+      "--device",
+      "cpu",
+      "--seed",
+      "42"
+    ],
+    "raw_samples": 300,
+    "unique_samples": 185,
+    "train_samples": 167,
+    "validation_samples": 18,
+    "split_fingerprint": "sha256:e99e3ae466689289263ad21aac54f7c3a27e7f0e6230287e10306dd8b7e02b18",
+    "optimizer_steps": 300,
+    "measured_training_seconds": 17.98129750303633,
+    "best_validation": {
+      "epoch": 24,
+      "ce": 0.5481589105394151,
+      "perplexity": 1.7300648797279818
+    },
+    "latest_validation": {
+      "epoch": 50,
+      "ce": 0.6207752757602267,
+      "perplexity": 1.8603697824982677
+    }
+  },
+  "sft": {
+    "command": [
+      ".venv/bin/python",
+      "trainer/train_sft.py",
+      "--data_path",
+      "dataset/demo/sft_demo.jsonl",
+      "--tokenizer_dir",
+      "tokenizer",
+      "--init_from",
+      "/tmp/minimind-cpu-pilot/pretrain_128_best.pth",
+      "--out_dir",
+      "/tmp/minimind-cpu-pilot",
+      "--hidden_size",
+      "128",
+      "--num_hidden_layers",
+      "2",
+      "--num_attention_heads",
+      "4",
+      "--num_key_value_heads",
+      "2",
+      "--max_length",
+      "96",
+      "--epochs",
+      "100",
+      "--batch_size",
+      "16",
+      "--lr",
+      "0.0005",
+      "--log_interval",
+      "100",
+      "--save_interval",
+      "200",
+      "--device",
+      "cpu",
+      "--seed",
+      "42"
+    ],
+    "raw_samples": 100,
+    "unique_samples": 100,
+    "train_samples": 90,
+    "validation_samples": 10,
+    "split_fingerprint": "sha256:1077165ffc953c81045116669d3660e390393d4686ca1692de4d68379ad0ef0f",
+    "optimizer_steps": 600,
+    "measured_training_seconds": 23.53291608496511,
+    "best_validation": {
+      "epoch": 30,
+      "ce": 0.33477791377476285,
+      "perplexity": 1.397629956391466,
+      "strict_exact_matches": 5,
+      "evaluated_samples": 10
+    },
+    "latest_validation": {
+      "epoch": 100,
+      "ce": 0.3508035387311663,
+      "perplexity": 1.4202082825812852,
+      "strict_exact_matches": 6,
+      "evaluated_samples": 10
+    },
+    "held_out_results": [
+      {
+        "source_index": 75,
+        "expected": "7 plus 5 equals 12.",
+        "best_completion": "7 plus 5 equals 12.",
+        "latest_completion": "7 plus 5 equals 12."
+      },
+      {
+        "source_index": 99,
+        "expected": "9 plus 9 equals 18.",
+        "best_completion": "9 plus 9 equals 16.",
+        "latest_completion": "9 plus 9 equals 16."
+      },
+      {
+        "source_index": 2,
+        "expected": "0 plus 2 equals 2.",
+        "best_completion": "0 plus 2 equals 2.",
+        "latest_completion": "0 plus 2 equals 2."
+      },
+      {
+        "source_index": 88,
+        "expected": "8 plus 8 equals 16.",
+        "best_completion": "8 plus 8 equals 17.",
+        "latest_completion": "8 plus 8 equals 17."
+      },
+      {
+        "source_index": 51,
+        "expected": "5 plus 1 equals 6.",
+        "best_completion": "5 plus 1 equals 7.",
+        "latest_completion": "5 plus 1 equals 6."
+      },
+      {
+        "source_index": 67,
+        "expected": "6 plus 7 equals 13.",
+        "best_completion": "6 plus 7 equals 13.",
+        "latest_completion": "6 plus 7 equals 13."
+      },
+      {
+        "source_index": 95,
+        "expected": "9 plus 5 equals 14.",
+        "best_completion": "9 plus 5 equals 14.",
+        "latest_completion": "9 plus 5 equals 14."
+      },
+      {
+        "source_index": 19,
+        "expected": "1 plus 9 equals 10.",
+        "best_completion": "1 plus 9 equals 9.",
+        "latest_completion": "1 plus 9 equals 9."
+      },
+      {
+        "source_index": 81,
+        "expected": "8 plus 1 equals 9.",
+        "best_completion": "8 plus 1 equals 9.",
+        "latest_completion": "8 plus 1 equals 9."
+      },
+      {
+        "source_index": 11,
+        "expected": "1 plus 1 equals 2.",
+        "best_completion": "1 plus 1 equals 1.",
+        "latest_completion": "1 plus 1 equals 3."
+      }
+    ]
+  },
+  "limitations": [
+    "The committed demo data is tiny and synthetic.",
+    "Pretraining covers the same arithmetic domain as SFT.",
+    "The held-out SFT split contains only 10 examples.",
+    "Checkpoints were written to /tmp and are intentionally not committed.",
+    "The run does not validate CUDA, MPS, NCCL, multi-GPU, or production model quality."
+  ]
+}

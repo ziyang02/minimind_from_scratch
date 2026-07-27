@@ -6,6 +6,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import Dataset, TensorDataset
+from transformers import AutoTokenizer
 
 from model.model import NinjaMindConfig, NinjaMindForCausalLM
 from trainer.train_dpo import (
@@ -23,12 +24,15 @@ from trainer.trainer_utils import (
     compute_gae,
     containment_reward,
     distributed_mean_metrics,
+    evaluate_supervised,
     load_weights,
     masked_mean,
+    normalize_token_weighted_gradients,
     parse_distributed_env,
     sample_generate,
     save_checkpoint,
     setup_distributed,
+    tokenizer_fingerprint,
     train_supervised,
     whiten,
 )
@@ -286,6 +290,29 @@ class _TripleDataset(Dataset):
         return x, y, torch.ones(2)
 
 
+class _UnevenTokenDataset(Dataset):
+    """Two conflicting examples with one versus three supervised tokens."""
+
+    examples = (
+        (
+            torch.tensor([1, 1, 1]),
+            torch.tensor([0, 0, 0]),
+            torch.tensor([1, 0, 0]),
+        ),
+        (
+            torch.tensor([1, 1, 1]),
+            torch.tensor([1, 1, 1]),
+            torch.tensor([1, 1, 1]),
+        ),
+    )
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, index):
+        return self.examples[index]
+
+
 class _TinyLM(nn.Module):
     def __init__(self):
         super().__init__()
@@ -322,8 +349,147 @@ def test_supervised_loop_flushes_partial_accumulation_window():
         torch.device("cpu"),
         lambda saved_model: saves.append(saved_model),
     )
-    assert stats == {"optimizer_steps": 2, "micro_steps": 3, "total_steps": 2}
+    assert {
+        key: stats[key] for key in ("optimizer_steps", "micro_steps", "total_steps")
+    } == {"optimizer_steps": 2, "micro_steps": 3, "total_steps": 2}
+    assert len(stats["history"]) == 1
+    assert stats["history"][0]["epoch_complete"] is True
     assert saves == [model]
+
+
+def test_accumulation_matches_one_token_weighted_full_batch_update():
+    torch.manual_seed(31)
+    accumulated = _TinyLM()
+    full_batch = _TinyLM()
+    full_batch.load_state_dict(accumulated.state_dict())
+    dataset = _UnevenTokenDataset()
+
+    train_supervised(
+        accumulated,
+        dataset,
+        _train_args(batch_size=1, accumulation_steps=2),
+        torch.device("cpu"),
+        lambda _model: None,
+    )
+    train_supervised(
+        full_batch,
+        dataset,
+        _train_args(batch_size=2, accumulation_steps=1),
+        torch.device("cpu"),
+        lambda _model: None,
+    )
+
+    for accumulated_parameter, batched_parameter in zip(
+        accumulated.parameters(),
+        full_batch.parameters(),
+        strict=True,
+    ):
+        torch.testing.assert_close(
+            accumulated_parameter,
+            batched_parameter,
+            rtol=1e-6,
+            atol=1e-7,
+        )
+
+
+def test_ddp_gradient_normalization_uses_global_token_count(monkeypatch):
+    parameter = nn.Parameter(torch.tensor([0.0]))
+    # DDP has already averaged local NLL-sum gradients 3 and 400.
+    parameter.grad = torch.tensor([(3.0 + 400.0) / 2])
+    context = DistributedContext(world_size=2, device=torch.device("cpu"))
+    monkeypatch.setattr(torch.distributed, "is_available", lambda: True)
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+
+    def fake_all_reduce(token_count, op):
+        assert op == torch.distributed.ReduceOp.SUM
+        token_count.add_(100)
+
+    monkeypatch.setattr(torch.distributed, "all_reduce", fake_all_reduce)
+    global_tokens = normalize_token_weighted_gradients([parameter], 1, context)
+
+    assert global_tokens == 101
+    assert parameter.grad.item() == pytest.approx((3.0 + 400.0) / 101)
+
+
+def test_final_planned_step_only_emits_a_finalized_checkpoint():
+    events = []
+
+    def record_save(_model, *, optimizer, scaler, training_state, kind):
+        del optimizer, scaler
+        events.append(
+            (
+                kind,
+                training_state["optimizer_step"],
+                training_state["checkpoint_finalized"],
+            )
+        )
+
+    train_supervised(
+        _TinyLM(),
+        _TripleDataset(size=4),
+        _train_args(
+            accumulation_steps=1,
+            max_steps=2,
+            save_interval=2,
+        ),
+        torch.device("cpu"),
+        record_save,
+    )
+
+    assert events == [("latest", 2, True)]
+
+
+def test_resuming_finalized_checkpoint_reemits_recoverable_outputs(tmp_path):
+    checkpoint = tmp_path / "finalized.pth"
+    args = _train_args(
+        accumulation_steps=1,
+        max_steps=1,
+        save_interval=1,
+        seed=71,
+        resume="",
+    )
+
+    def persist(model, *, optimizer, scaler, training_state, kind):
+        assert kind == "latest"
+        save_checkpoint(
+            str(checkpoint),
+            model,
+            optimizer=optimizer,
+            scaler=scaler,
+            stage="finalization-test",
+            training_state=training_state,
+        )
+
+    train_supervised(
+        _TinyLM(),
+        _TripleDataset(size=3),
+        args,
+        torch.device("cpu"),
+        persist,
+        stage="finalization-test",
+    )
+
+    reemitted = []
+    artifact_updates = []
+
+    def recover(model, *, optimizer, scaler, training_state, kind):
+        del model, optimizer, scaler
+        reemitted.append((kind, training_state["checkpoint_finalized"]))
+
+    train_supervised(
+        _TinyLM(),
+        _TripleDataset(size=3),
+        Namespace(**{**vars(args), "resume": str(checkpoint)}),
+        torch.device("cpu"),
+        recover,
+        epoch_callback=lambda history, state: artifact_updates.append(
+            (len(history), state["checkpoint_finalized"])
+        ),
+        stage="finalization-test",
+    )
+
+    assert reemitted == [("latest", True)]
+    assert artifact_updates == [(1, True)]
 
 
 def test_checkpoint_loader_supports_structured_and_legacy_state_dicts(tmp_path):
@@ -356,3 +522,232 @@ def test_checkpoint_loader_supports_structured_and_legacy_state_dicts(tmp_path):
     )
     assert loaded_metadata["format_version"] == 1
     assert torch.equal(structured_target.bias, source.bias)
+
+
+def test_tokenizer_fingerprint_covers_vocabulary_and_chat_template():
+    tokenizer = AutoTokenizer.from_pretrained("tokenizer", local_files_only=True)
+    original_template = tokenizer.chat_template
+    original_fingerprint = tokenizer_fingerprint(tokenizer)
+
+    assert tokenizer_fingerprint(tokenizer) == original_fingerprint
+    tokenizer.chat_template = f"{original_template}\n"
+    assert tokenizer_fingerprint(tokenizer) != original_fingerprint
+
+
+class _MaskedValidationDataset(Dataset):
+    pad_id = 0
+
+    def __init__(self, zero_mask=False):
+        masks = [
+            torch.zeros(3, dtype=torch.long)
+            if zero_mask
+            else torch.tensor([1, 0, 0]),
+            torch.zeros(3, dtype=torch.long)
+            if zero_mask
+            else torch.tensor([1, 1, 0]),
+        ]
+        self.examples = [
+            (torch.tensor([1, 0, 0]), torch.tensor([0, 2, 1]), masks[0]),
+            (torch.tensor([2, 2, 0]), torch.tensor([1, 0, 2]), masks[1]),
+        ]
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, index):
+        return self.examples[index]
+
+
+class _FixedValidationLM(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.register_buffer(
+            "logit_table",
+            torch.tensor(
+                [
+                    [100.0, -100.0, -100.0],
+                    [2.0, 0.0, -1.0],
+                    [0.0, 1.0, 0.0],
+                ]
+            ),
+        )
+        self.forward_modes = []
+        self.attention_masks = []
+
+    def forward(self, input_ids, attention_mask=None):
+        self.forward_modes.append((self.training, torch.is_grad_enabled()))
+        self.attention_masks.append(attention_mask.detach().clone())
+        return SimpleNamespace(logits=self.logit_table[input_ids])
+
+
+class _LazyValidationBufferLM(_FixedValidationLM):
+    def forward(self, input_ids, attention_mask=None):
+        if not hasattr(self, "lazy_buffer"):
+            self.register_buffer("lazy_buffer", torch.ones(1))
+        return super().forward(input_ids, attention_mask=attention_mask)
+
+
+def test_validation_is_token_weighted_padding_aware_and_restores_mode():
+    model = _FixedValidationLM().train()
+    dataset = _MaskedValidationDataset()
+    args = Namespace(batch_size=1, num_workers=0, device="cpu")
+
+    metrics = evaluate_supervised(model, dataset, args, torch.device("cpu"))
+
+    first = F.cross_entropy(
+        model.logit_table[1].unsqueeze(0),
+        torch.tensor([0]),
+        reduction="sum",
+    )
+    second = F.cross_entropy(
+        model.logit_table[torch.tensor([2, 2])],
+        torch.tensor([1, 0]),
+        reduction="sum",
+    )
+    expected_ce = ((first + second) / 3).item()
+    assert metrics["validation_ce"] == pytest.approx(expected_ce)
+    assert metrics["validation_perplexity"] == pytest.approx(torch.exp(torch.tensor(expected_ce)))
+    assert metrics["validation_tokens"] == 3
+    assert metrics["perplexity_overflow"] is False
+    assert model.training
+    assert model.forward_modes == [(False, False), (False, False)]
+    assert torch.equal(model.attention_masks[0], torch.tensor([[1, 0, 0]], dtype=torch.bool))
+    assert torch.equal(model.attention_masks[1], torch.tensor([[1, 1, 0]], dtype=torch.bool))
+
+
+def test_validation_rejects_a_split_without_target_tokens_and_restores_mode():
+    model = _FixedValidationLM().train()
+    with pytest.raises(ValueError, match="no supervised target tokens"):
+        evaluate_supervised(
+            model,
+            _MaskedValidationDataset(zero_mask=True),
+            Namespace(batch_size=2, num_workers=0, device="cpu"),
+            torch.device("cpu"),
+        )
+    assert model.training
+
+
+def test_validation_lazy_buffers_remain_usable_by_ddp_afterward():
+    model = _LazyValidationBufferLM().train()
+    evaluate_supervised(
+        model,
+        _MaskedValidationDataset(),
+        Namespace(batch_size=2, num_workers=0, device="cpu"),
+        torch.device("cpu"),
+    )
+
+    assert not torch.is_inference(model.lazy_buffer)
+
+
+class _DropoutLM(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.embedding = nn.Embedding(3, 8)
+        self.dropout = nn.Dropout(0.25)
+        self.head = nn.Linear(8, 3)
+
+    def forward(self, input_ids):
+        return SimpleNamespace(logits=self.head(self.dropout(self.embedding(input_ids))))
+
+
+def _assert_nested_state_equal(left, right):
+    if torch.is_tensor(left):
+        torch.testing.assert_close(left, right, rtol=0, atol=0)
+    elif isinstance(left, dict):
+        assert left.keys() == right.keys()
+        for key in left:
+            _assert_nested_state_equal(left[key], right[key])
+    elif isinstance(left, (list, tuple)):
+        assert len(left) == len(right)
+        for left_item, right_item in zip(left, right, strict=True):
+            _assert_nested_state_equal(left_item, right_item)
+    else:
+        assert left == right
+
+
+def test_supervised_resume_matches_uninterrupted_model_optimizer_and_rng(tmp_path):
+    identity = {"dataset": "tiny-v1"}
+    common_args = {
+        "batch_size": 1,
+        "num_workers": 0,
+        "device": "cpu",
+        "lr": 1e-2,
+        "epochs": 1,
+        "accumulation_steps": 2,
+        "grad_clip": 1.0,
+        "max_steps": 4,
+        "log_interval": 100,
+        "save_interval": 2,
+        "seed": 123,
+        "resume": "",
+    }
+    interrupted_path = tmp_path / "interrupted.pth"
+    continuous_path = tmp_path / "continuous.pth"
+    resumed_path = tmp_path / "resumed.pth"
+
+    def checkpoint_callback(target_for_final):
+        def save(model, *, optimizer, scaler, training_state, kind):
+            del kind
+            target = (
+                interrupted_path
+                if training_state["optimizer_step"] == 2
+                else target_for_final
+            )
+            save_checkpoint(
+                str(target),
+                model,
+                optimizer=optimizer,
+                scaler=scaler,
+                step=training_state["optimizer_step"],
+                stage="resume-test",
+                training_state=training_state,
+            )
+
+        return save
+
+    torch.manual_seed(77)
+    continuous_model = _DropoutLM()
+    continuous_stats = train_supervised(
+        continuous_model,
+        _TripleDataset(size=8),
+        Namespace(**common_args),
+        torch.device("cpu"),
+        checkpoint_callback(continuous_path),
+        stage="resume-test",
+        run_identity=identity,
+    )
+    assert interrupted_path.exists()
+    assert continuous_path.exists()
+
+    torch.manual_seed(999)
+    resumed_model = _DropoutLM()
+    resumed_stats = train_supervised(
+        resumed_model,
+        _TripleDataset(size=8),
+        Namespace(**{**common_args, "resume": str(interrupted_path)}),
+        torch.device("cpu"),
+        checkpoint_callback(resumed_path),
+        stage="resume-test",
+        run_identity=identity,
+    )
+
+    continuous = torch.load(continuous_path, map_location="cpu", weights_only=True)
+    resumed = torch.load(resumed_path, map_location="cpu", weights_only=True)
+    _assert_nested_state_equal(
+        continuous["model_state_dict"],
+        resumed["model_state_dict"],
+    )
+    _assert_nested_state_equal(
+        continuous["optimizer_state_dict"],
+        resumed["optimizer_state_dict"],
+    )
+    torch.testing.assert_close(
+        continuous["rng_state"]["torch_cpu"],
+        resumed["rng_state"]["torch_cpu"],
+        rtol=0,
+        atol=0,
+    )
+    assert continuous_stats["optimizer_steps"] == resumed_stats["optimizer_steps"] == 4
+    assert continuous_stats["history"][-1]["train_ce"] == pytest.approx(
+        resumed_stats["history"][-1]["train_ce"]
+    )

@@ -6,6 +6,8 @@ W + (alpha / r) * B @ A. Only A and B train — a tiny fraction of the params.
 """
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 from types import MethodType
 
@@ -71,6 +73,29 @@ def lora_state_dict(model):
     }
 
 
+def _atomic_torch_save(payload, path):
+    """Serialize beside ``path`` and atomically replace the destination."""
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        dir=destination.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            torch.save(payload, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        temporary.unlink(missing_ok=True)
+
+
 def save_lora(model, path, metadata=None):
     """Save adapters and enough metadata to inspect/reload the checkpoint."""
     first_lora = next((module for module in model.modules() if isinstance(module, LoRA)), None)
@@ -89,8 +114,7 @@ def save_lora(model, path, metadata=None):
         "metadata": metadata or {},
         "state_dict": lora_state_dict(model),
     }
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    torch.save(payload, path)
+    _atomic_torch_save(payload, path)
 
 
 def load_lora(model, path):

@@ -8,8 +8,12 @@ restrict logs/checkpoints to rank zero.
 
 from __future__ import annotations
 
+import hashlib
+import inspect
+import json
 import math
 import os
+import time
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -19,7 +23,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler, Subset
 
 
 # --------------------------------------------------------------------------- #
@@ -240,6 +244,7 @@ def build_dataloader(
     drop_last: bool = False,
     collate_fn=None,
     batch_size: int | None = None,
+    generator: torch.Generator | None = None,
 ) -> DataLoader:
     """Create a sharded loader under DDP and a normal loader otherwise."""
 
@@ -252,6 +257,7 @@ def build_dataloader(
             rank=context.rank,
             shuffle=shuffle,
             drop_last=drop_last,
+            seed=int(getattr(args, "seed", 42)),
         )
     # RandomSampler rejects an empty dataset.  Disabling shuffle gives empty
     # datasets a clean zero-step behavior, useful for validation and tests.
@@ -265,6 +271,7 @@ def build_dataloader(
         num_workers=getattr(args, "num_workers", 0),
         collate_fn=collate_fn,
         pin_memory=context.device.type == "cuda",
+        generator=generator,
     )
 
 
@@ -317,6 +324,41 @@ def add_train_args(parser, default_lr):
     add_distributed_args(parser)
 
 
+def add_supervised_eval_args(parser):
+    """Add validation, artifact, and exact single-process resume options."""
+
+    parser.add_argument(
+        "--validation_fraction",
+        type=float,
+        default=0.1,
+        help="fraction of unique, grouped samples reserved for validation (0 disables)",
+    )
+    parser.add_argument(
+        "--split_seed",
+        type=int,
+        default=None,
+        help="stable train/validation split seed (defaults to --seed)",
+    )
+    parser.add_argument(
+        "--metrics_dir",
+        type=str,
+        default="",
+        help="JSON/CSV/SVG metric output directory (defaults to OUT_DIR/metrics)",
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default="",
+        help="strict v2 training checkpoint to resume (distinct from --init_from)",
+    )
+    parser.add_argument(
+        "--save_interval",
+        type=int,
+        default=0,
+        help="save resumable latest checkpoint every N optimizer steps (0 = epoch boundary)",
+    )
+
+
 def build_model(args, vocab_size, device, context: DistributedContext | None = None):
     from model.model import NinjaMindConfig, NinjaMindForCausalLM
 
@@ -367,6 +409,42 @@ def _tokenizer_metadata(tokenizer) -> dict[str, Any] | None:
         "vocab_size": len(tokenizer),
         "special_tokens_map": _plain_value(getattr(tokenizer, "special_tokens_map", {})),
     }
+
+
+def tokenizer_fingerprint(tokenizer) -> str:
+    """Hash the tokenizer state that changes supervised tokenization.
+
+    A vocabulary-size check alone cannot distinguish two tokenizers that map
+    the same number of tokens to different IDs.  Strict resume identities use
+    this digest to reject that silent preprocessing change.
+    """
+
+    if tokenizer is None or not hasattr(tokenizer, "get_vocab"):
+        raise TypeError("tokenizer must provide get_vocab()")
+    payload = {
+        "class": tokenizer.__class__.__name__,
+        "vocab": tokenizer.get_vocab(),
+        "chat_template": getattr(tokenizer, "chat_template", None),
+        "special_tokens_map": _plain_value(
+            getattr(tokenizer, "special_tokens_map", {})
+        ),
+        "special_token_ids": {
+            name: getattr(tokenizer, name, None)
+            for name in (
+                "bos_token_id",
+                "eos_token_id",
+                "pad_token_id",
+                "unk_token_id",
+            )
+        },
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def checkpoint_model_state(checkpoint: Mapping[str, Any]) -> Mapping[str, torch.Tensor]:
@@ -422,8 +500,10 @@ def save_checkpoint(
     tokenizer=None,
     args=None,
     optimizer=None,
+    scaler=None,
     step: int | None = None,
     stage: str | None = None,
+    training_state: Mapping[str, Any] | None = None,
     extra: Mapping[str, Any] | None = None,
     context: DistributedContext | None = None,
 ) -> bool:
@@ -440,8 +520,12 @@ def save_checkpoint(
     config = config or getattr(base_model, "config", None)
     config_dict = config.to_dict() if hasattr(config, "to_dict") else config
     train_args = vars(args) if args is not None and hasattr(args, "__dict__") else args
+    resumable_v2 = training_state is not None and not (
+        context is not None and context.distributed
+    )
+    format_version = 2 if resumable_v2 else 1
     payload: dict[str, Any] = {
-        "format_version": 1,
+        "format_version": format_version,
         "model_state_dict": base_model.state_dict(),
         "config": _plain_value(config_dict),
         "tokenizer": _tokenizer_metadata(tokenizer),
@@ -451,9 +535,21 @@ def save_checkpoint(
     }
     if optimizer is not None:
         payload["optimizer_state_dict"] = optimizer.state_dict()
+    if scaler is not None:
+        payload["scaler_state_dict"] = scaler.state_dict()
+    if training_state is not None:
+        payload["training_state"] = _plain_value(training_state)
+    if resumable_v2:
+        from trainer.checkpointing import capture_rng_state
+
+        payload["rng_state"] = capture_rng_state()
+        payload["run_identity"] = _plain_value(training_state.get("run_identity", {}))
+        payload["world_size"] = 1
     if extra:
         payload["extra"] = _plain_value(extra)
-    torch.save(payload, path)
+    from trainer.checkpointing import atomic_torch_save
+
+    atomic_torch_save(payload, path)
     rank0_print(f"checkpoint saved: {path}", context=context)
     return True
 
@@ -477,14 +573,143 @@ def cosine_lr(step, total_steps, max_lr, warmup_ratio=0.02, min_ratio=0.1):
     return max_lr * (min_ratio + 0.5 * (1 - min_ratio) * (1 + math.cos(math.pi * progress)))
 
 
+def masked_ce_sum_and_count(logits, targets, mask):
+    """Return summed token NLL and valid-token count for a masked batch."""
+
+    token_loss = F.cross_entropy(
+        logits.reshape(-1, logits.size(-1)).float(), targets.reshape(-1), reduction="none"
+    )
+    flat_mask = mask.reshape(-1).to(dtype=token_loss.dtype)
+    return (token_loss * flat_mask).sum(), flat_mask.sum()
+
+
 def masked_ce(logits, targets, mask):
     """Cross entropy averaged over positions where ``mask`` is 1."""
 
-    loss = F.cross_entropy(
-        logits.reshape(-1, logits.size(-1)).float(), targets.reshape(-1), reduction="none"
+    loss_sum, token_count = masked_ce_sum_and_count(logits, targets, mask)
+    return loss_sum / token_count.clamp(min=1)
+
+
+def _dataset_attr(dataset, name, default=None):
+    """Read an attribute through nested dataset index views/subsets."""
+
+    current = dataset
+    while current is not None:
+        if hasattr(current, name):
+            return getattr(current, name)
+        current = getattr(current, "dataset", None)
+    return default
+
+
+@torch.no_grad()
+def evaluate_supervised(
+    model,
+    dataset,
+    args,
+    device,
+    context: DistributedContext | None = None,
+):
+    """Compute exact token-weighted validation CE/perplexity.
+
+    Validation indices are strided across ranks without padding, so no sample
+    is duplicated when the dataset size is not divisible by ``world_size``.
+    The unwrapped module avoids DDP forward collectives when ranks receive a
+    different number of batches; all ranks only synchronize the final NLL sum
+    and token count. ``no_grad`` is intentional: inference mode would mark
+    lazily-created RoPE/cache buffers as inference tensors that DDP cannot
+    subsequently synchronize during training.
+    """
+
+    context = context or DistributedContext(device=device)
+    local_indices = range(context.rank, len(dataset), context.world_size)
+    local_dataset = Subset(dataset, tuple(local_indices))
+    local_context = DistributedContext(device=device)
+    loader = build_dataloader(
+        local_dataset,
+        args,
+        local_context,
+        shuffle=False,
+        drop_last=False,
     )
-    mask = mask.reshape(-1).float()
-    return (loss * mask).sum() / mask.sum().clamp(min=1)
+    base_model = unwrap_model(model)
+    was_training = base_model.training
+    base_model.eval()
+    pad_id = _dataset_attr(dataset, "pad_id")
+    totals = torch.zeros(2, dtype=torch.float64, device=device)
+    try:
+        for X, Y, loss_mask in loader:
+            X = X.to(device, non_blocking=True)
+            Y = Y.to(device, non_blocking=True)
+            loss_mask = loss_mask.to(device, non_blocking=True)
+            model_inputs = {"input_ids": X}
+            if pad_id is not None:
+                model_inputs["attention_mask"] = X.ne(pad_id)
+            with autocast_ctx(device):
+                output = base_model(**model_inputs)
+            loss_sum, token_count = masked_ce_sum_and_count(
+                output.logits,
+                Y,
+                loss_mask,
+            )
+            totals[0] += loss_sum.detach().double()
+            totals[1] += token_count.detach().double()
+    finally:
+        base_model.train(was_training)
+
+    if context.distributed:
+        if not dist.is_available() or not dist.is_initialized():
+            raise RuntimeError("distributed validation requires an initialized process group")
+        dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+
+    token_count = int(totals[1].item())
+    if token_count == 0:
+        raise ValueError("validation split contains no supervised target tokens")
+    validation_ce = totals[0].item() / token_count
+    try:
+        perplexity = math.exp(validation_ce)
+    except OverflowError:
+        perplexity = None
+    if perplexity is not None and not math.isfinite(perplexity):
+        perplexity = None
+    return {
+        "validation_ce": validation_ce,
+        "validation_perplexity": perplexity,
+        "validation_tokens": token_count,
+        "perplexity_overflow": perplexity is None,
+    }
+
+
+def normalize_token_weighted_gradients(
+    params,
+    local_token_count: int,
+    context: DistributedContext,
+) -> int:
+    """Normalize accumulated NLL-sum gradients by the global token count.
+
+    DDP averages synchronized gradients across ranks.  Multiplying by
+    ``world_size / global_tokens`` therefore turns the averaged NLL-sum
+    gradient back into the gradient of one global token-weighted mean.
+    """
+
+    token_count = torch.tensor(
+        float(local_token_count),
+        dtype=torch.float64,
+        device=context.device,
+    )
+    if context.distributed:
+        if not dist.is_available() or not dist.is_initialized():
+            raise RuntimeError(
+                "distributed gradient normalization requires an initialized process group"
+            )
+        dist.all_reduce(token_count, op=dist.ReduceOp.SUM)
+    global_token_count = int(token_count.item())
+    if global_token_count <= 0:
+        raise ValueError("an optimizer window contains no supervised target tokens")
+    scale = context.world_size / global_token_count
+    for parameter in params:
+        if parameter.grad is not None:
+            parameter.grad.mul_(scale)
+    return global_token_count
 
 
 def masked_mean(x, mask, dim=None):
@@ -515,18 +740,33 @@ def train_supervised(
     save_fn,
     params=None,
     context: DistributedContext | None = None,
+    *,
+    validation_dataset=None,
+    epoch_callback=None,
+    stage: str | None = None,
+    run_identity: Mapping[str, Any] | None = None,
 ):
-    """Train over ``(X, Y, loss_mask)`` triples with AMP/DDP accumulation.
+    """Train supervised stages with exact validation and resumable cursors.
 
     The final partial batch and the final partial accumulation window both
     produce an optimizer update.  ``max_steps`` counts optimizer updates, not
-    micro-batches.
+    micro-batches. Checkpoints are only emitted at optimizer boundaries.
     """
 
     if args.accumulation_steps < 1:
         raise ValueError("accumulation_steps must be >= 1")
+    if getattr(args, "save_interval", 0) < 0:
+        raise ValueError("save_interval must be >= 0")
     context = context or DistributedContext(device=device)
-    loader = build_dataloader(dataset, args, context, shuffle=True, drop_last=False)
+    loader_generator = torch.Generator()
+    loader = build_dataloader(
+        dataset,
+        args,
+        context,
+        shuffle=True,
+        drop_last=False,
+        generator=loader_generator,
+    )
     if params is None:
         params = [p for p in model.parameters() if p.requires_grad]
     else:
@@ -541,25 +781,196 @@ def train_supervised(
     total_steps = updates_per_epoch * args.epochs
     if args.max_steps:
         total_steps = min(total_steps, args.max_steps)
+    seed = int(getattr(args, "seed", 42))
+
+    identity = {
+        **dict(run_identity or {}),
+        "training_contract": "supervised-v2",
+        "stage": stage,
+        "seed": seed,
+        "learning_rate": float(args.lr),
+        "grad_clip": float(args.grad_clip),
+        "epochs": int(args.epochs),
+        "max_steps": int(args.max_steps),
+        "device": str(device),
+        "batch_size": int(args.batch_size),
+        "accumulation_steps": int(args.accumulation_steps),
+        "batches_per_epoch": len(loader),
+        "dataset_max_length": _dataset_attr(dataset, "max_length"),
+        "planned_total_steps": total_steps,
+        "world_size": context.world_size,
+    }
 
     model.train()
     optimizer.zero_grad(set_to_none=True)
     optimizer_step = 0
     micro_step = 0
+    start_epoch = 0
+    start_batch = 0
+    history: list[dict[str, Any]] = []
+    best_validation_ce: float | None = None
+    partial_nll_sum = 0.0
+    partial_token_count = 0
+    partial_duration_seconds = 0.0
+    checkpoint_finalized = False
+
+    resume_path = getattr(args, "resume", "")
+    if resume_path:
+        if context.distributed:
+            raise RuntimeError(
+                "exact --resume is currently single-process only; use --init_from for DDP warm-start"
+            )
+        from trainer.checkpointing import load_training_state
+
+        restored = load_training_state(
+            resume_path,
+            unwrap_model(model),
+            optimizer,
+            scaler,
+            device=device,
+            expected_stage=stage,
+            expected_run_identity=identity,
+        )
+        start_epoch = int(restored["epoch"])
+        start_batch = int(restored["batch_in_epoch"])
+        optimizer_step = int(restored["optimizer_step"])
+        micro_step = int(restored.get("micro_steps_completed", 0))
+        history = list(restored.get("history", []))
+        best_validation_ce = restored.get("best_validation_ce")
+        partial_nll_sum = float(restored.get("partial_train_nll_sum", 0.0))
+        partial_token_count = int(restored.get("partial_train_tokens", 0))
+        partial_duration_seconds = float(restored.get("partial_duration_seconds", 0.0))
+        checkpoint_finalized = bool(restored.get("checkpoint_finalized", False))
+        rank0_print(
+            f"resumed {stage or 'supervised'} at epoch {start_epoch + 1} "
+            f"batch {start_batch} step {optimizer_step}",
+            context=context,
+        )
+
+    def training_state(
+        *,
+        epoch_cursor,
+        batch_cursor,
+        epoch_nll_sum,
+        epoch_token_count,
+        epoch_duration_seconds,
+        finalized,
+    ):
+        return {
+            "epoch": int(epoch_cursor),
+            "batch_in_epoch": int(batch_cursor),
+            "optimizer_step": int(optimizer_step),
+            # Checkpoints are emitted only after optimizer.step(), so no
+            # accumulation window is pending at a save boundary.
+            "micro_step": 0,
+            "micro_steps_completed": int(micro_step),
+            "planned_total_steps": int(total_steps),
+            "history": history,
+            "best_validation_ce": best_validation_ce,
+            "partial_train_nll_sum": float(epoch_nll_sum),
+            "partial_train_tokens": int(epoch_token_count),
+            "partial_duration_seconds": float(epoch_duration_seconds),
+            "checkpoint_finalized": bool(finalized),
+            "run_identity": identity,
+        }
+
+    def save(kind, state):
+        if not is_main_process(context):
+            return
+        callback_kwargs = {
+            "optimizer": optimizer,
+            "scaler": scaler,
+            "training_state": state,
+            "kind": kind,
+        }
+        try:
+            inspect.signature(save_fn).bind(unwrap_model(model), **callback_kwargs)
+        except (TypeError, ValueError):
+            # Preserve the historical one-argument callback for small embedded
+            # callers. Such callbacks save weights only and cannot be resumed.
+            save_fn(unwrap_model(model))
+        else:
+            save_fn(unwrap_model(model), **callback_kwargs)
+
+    if validation_dataset is not None and not history and optimizer_step == 0:
+        baseline = {
+            "epoch": 0,
+            "epoch_complete": True,
+            "optimizer_step": 0,
+            "learning_rate": None,
+            "train_ce": None,
+            "train_tokens": 0,
+            "duration_seconds": 0.0,
+            **evaluate_supervised(model, validation_dataset, args, device, context),
+        }
+        history.append(baseline)
+        best_validation_ce = float(baseline["validation_ce"])
+        baseline_state = training_state(
+            epoch_cursor=0,
+            batch_cursor=0,
+            epoch_nll_sum=0.0,
+            epoch_token_count=0,
+            epoch_duration_seconds=0.0,
+            finalized=False,
+        )
+        save("best", baseline_state)
+        if epoch_callback is not None and is_main_process(context):
+            epoch_callback(history, baseline_state)
+
+    run_finished = checkpoint_finalized and (
+        start_epoch >= args.epochs
+        or (args.max_steps and optimizer_step >= args.max_steps)
+    )
+    if run_finished:
+        restored_state = training_state(
+            epoch_cursor=start_epoch,
+            batch_cursor=start_batch,
+            epoch_nll_sum=partial_nll_sum,
+            epoch_token_count=partial_token_count,
+            epoch_duration_seconds=partial_duration_seconds,
+            finalized=True,
+        )
+        # Re-emitting final outputs makes a resume repair a process that died
+        # after the latest checkpoint but before best/artifact writes.
+        save("latest", restored_state)
+        if history and best_validation_ce is not None:
+            last_validation_ce = history[-1].get("validation_ce")
+            if (
+                last_validation_ce is not None
+                and float(last_validation_ce) == float(best_validation_ce)
+            ):
+                save("best", restored_state)
+        if epoch_callback is not None and is_main_process(context):
+            epoch_callback(history, restored_state)
+        return {
+            "optimizer_steps": optimizer_step,
+            "micro_steps": micro_step,
+            "total_steps": total_steps,
+            "history": history,
+            "best_validation_ce": best_validation_ce,
+        }
+
     stopped = False
 
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         if stopped:
             break
+        loader_generator.manual_seed(seed + epoch)
         set_dataloader_epoch(loader, epoch)
-        window_loss = 0.0
+        window_objective_sum = 0.0
+        window_token_count = 0
+        epoch_nll_sum = partial_nll_sum if epoch == start_epoch else 0.0
+        epoch_token_count = partial_token_count if epoch == start_epoch else 0
+        elapsed_before = partial_duration_seconds if epoch == start_epoch else 0.0
+        epoch_started = time.perf_counter()
+        next_batch_cursor = start_batch if epoch == start_epoch else 0
         for batch_index, (X, Y, loss_mask) in enumerate(loader):
+            if epoch == start_epoch and batch_index < start_batch:
+                continue
             if args.max_steps and optimizer_step >= args.max_steps:
                 stopped = True
                 break
 
-            group_start = (batch_index // args.accumulation_steps) * args.accumulation_steps
-            window_size = min(args.accumulation_steps, len(loader) - group_start)
             should_update = (
                 (batch_index + 1) % args.accumulation_steps == 0
                 or batch_index + 1 == len(loader)
@@ -581,20 +992,37 @@ def train_supervised(
             with sync_ctx:
                 with autocast_ctx(device):
                     out = model(**model_inputs)
-                    raw_loss = masked_ce(out.logits, Y, loss_mask)
+                    batch_nll_sum, batch_token_count = masked_ce_sum_and_count(
+                        out.logits,
+                        Y,
+                        loss_mask,
+                    )
+                    objective_sum = batch_nll_sum
                     aux = getattr(out, "aux_loss", None)
                     if torch.is_tensor(aux):
-                        raw_loss = raw_loss + aux
-                    loss = raw_loss / window_size
+                        # Treat router aux as a per-target-token penalty so the
+                        # same global normalization applies without mixing it
+                        # into the reported pure CE metric.
+                        objective_sum = objective_sum + aux * batch_token_count
+                    loss = objective_sum
                 scaler.scale(loss).backward()
 
-            window_loss += raw_loss.detach().float().item() / window_size
+            window_objective_sum += objective_sum.detach().float().item()
+            window_token_count += int(batch_token_count.detach().item())
+            epoch_nll_sum += batch_nll_sum.detach().double().item()
+            epoch_token_count += int(batch_token_count.detach().item())
             micro_step += 1
+            next_batch_cursor = batch_index + 1
             if not should_update:
                 continue
 
             # AMP order is important: unscale -> clip -> optimizer step.
             scaler.unscale_(optimizer)
+            normalize_token_weighted_gradients(
+                params,
+                window_token_count,
+                context,
+            )
             torch.nn.utils.clip_grad_norm_(params, args.grad_clip)
             scaler.step(optimizer)
             scaler.update()
@@ -604,21 +1032,112 @@ def train_supervised(
             if (optimizer_step - 1) % args.log_interval == 0:
                 rank0_print(
                     f"epoch {epoch + 1}/{args.epochs} step {optimizer_step}/{total_steps} "
-                    f"loss {window_loss:.4f} lr {lr:.2e}",
+                    f"loss {window_objective_sum / window_token_count:.4f} lr {lr:.2e}",
                     context=context,
                 )
-            window_loss = 0.0
+            window_objective_sum = 0.0
+            window_token_count = 0
 
-        if is_main_process(context):
-            save_fn(unwrap_model(model))
+            save_interval = int(getattr(args, "save_interval", 0))
+            if (
+                save_interval
+                and optimizer_step % save_interval == 0
+                and optimizer_step < total_steps
+                and next_batch_cursor < len(loader)
+            ):
+                cursor_epoch = epoch
+                cursor_batch = next_batch_cursor
+                save(
+                    "latest",
+                    training_state(
+                        epoch_cursor=cursor_epoch,
+                        batch_cursor=cursor_batch,
+                        epoch_nll_sum=0.0 if cursor_epoch > epoch else epoch_nll_sum,
+                        epoch_token_count=0 if cursor_epoch > epoch else epoch_token_count,
+                        epoch_duration_seconds=(
+                            0.0
+                            if cursor_epoch > epoch
+                            else elapsed_before + time.perf_counter() - epoch_started
+                        ),
+                        finalized=False,
+                    ),
+                )
 
-    # An empty dataset still produces a valid initialized checkpoint.
-    if not len(loader) and is_main_process(context):
-        save_fn(unwrap_model(model))
+        epoch_duration = elapsed_before + time.perf_counter() - epoch_started
+        epoch_complete = next_batch_cursor >= len(loader)
+        aggregate = torch.tensor(
+            [epoch_nll_sum, float(epoch_token_count)],
+            dtype=torch.float64,
+            device=device,
+        )
+        if context.distributed:
+            dist.all_reduce(aggregate, op=dist.ReduceOp.SUM)
+        global_tokens = int(aggregate[1].item())
+        record = {
+            "epoch": epoch + 1,
+            "epoch_complete": epoch_complete,
+            "optimizer_step": optimizer_step,
+            "learning_rate": (
+                float(optimizer.param_groups[0]["lr"]) if optimizer.param_groups else None
+            ),
+            "train_ce": aggregate[0].item() / global_tokens if global_tokens else None,
+            "train_tokens": global_tokens,
+            "duration_seconds": epoch_duration,
+        }
+        if validation_dataset is not None:
+            record.update(evaluate_supervised(model, validation_dataset, args, device, context))
+        else:
+            record.update({
+                "validation_ce": None,
+                "validation_perplexity": None,
+                "validation_tokens": 0,
+                "perplexity_overflow": False,
+            })
+        history.append(record)
+        rank0_print(
+            f"epoch {epoch + 1} metrics train_ce={record['train_ce']} "
+            f"validation_ce={record['validation_ce']} "
+            f"perplexity={record['validation_perplexity']}",
+            context=context,
+        )
+
+        improved = (
+            record["validation_ce"] is not None
+            and (
+                best_validation_ce is None
+                or float(record["validation_ce"]) < best_validation_ce
+            )
+        )
+        if improved:
+            best_validation_ce = float(record["validation_ce"])
+
+        cursor_epoch = epoch + 1 if epoch_complete else epoch
+        cursor_batch = 0 if epoch_complete else next_batch_cursor
+        state = training_state(
+            epoch_cursor=cursor_epoch,
+            batch_cursor=cursor_batch,
+            epoch_nll_sum=0.0 if epoch_complete else epoch_nll_sum,
+            epoch_token_count=0 if epoch_complete else epoch_token_count,
+            epoch_duration_seconds=0.0 if epoch_complete else epoch_duration,
+            finalized=True,
+        )
+        save("latest", state)
+        if improved:
+            save("best", state)
+        if epoch_callback is not None and is_main_process(context):
+            epoch_callback(history, state)
+
+        start_batch = 0
+        partial_nll_sum = 0.0
+        partial_token_count = 0
+        partial_duration_seconds = 0.0
+
     return {
         "optimizer_steps": optimizer_step,
         "micro_steps": micro_step,
         "total_steps": total_steps,
+        "history": history,
+        "best_validation_ce": best_validation_ce,
     }
 
 
