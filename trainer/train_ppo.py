@@ -43,6 +43,7 @@ from trainer.trainer_utils import (
     make_grad_scaler,
     masked_mean,
     rank0_print,
+    reference_overlap_reward,
     sample_generate,
     save_checkpoint,
     set_dataloader_epoch,
@@ -122,6 +123,11 @@ def _train(args, context):
     stopped = False
     actor_optimizer.zero_grad(set_to_none=True)
     critic_optimizer.zero_grad(set_to_none=True)
+    reward_function = (
+        reference_overlap_reward
+        if args.reward_mode == "overlap"
+        else containment_reward
+    )
 
     for epoch in range(args.epochs):
         if stopped:
@@ -163,7 +169,7 @@ def _train(args, context):
             ]
             environment_reward = torch.tensor(
                 [
-                    containment_reward(completion, answer)
+                    reward_function(completion, answer)
                     for completion, answer in zip(
                         completions, batch["answer"], strict=True
                     )
@@ -289,7 +295,11 @@ def _train(args, context):
         optimizer=actor_optimizer,
         step=optimizer_step,
         stage="ppo",
-        extra={"critic_trained": True, "reference_checkpoint": args.init_from},
+        extra={
+            "critic_trained": True,
+            "reference_checkpoint": args.init_from,
+            "reward_mode": args.reward_mode,
+        },
         context=context,
     )
 
@@ -311,6 +321,12 @@ def main():
     parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument("--lam", type=float, default=0.95)
     parser.add_argument("--critic_lr", type=float, default=1e-5)
+    parser.add_argument(
+        "--reward_mode",
+        choices=("containment", "overlap"),
+        default="containment",
+        help="rule reward: exact containment or continuous reference overlap",
+    )
     add_model_args(parser)
     add_train_args(parser, default_lr=1e-6)
     args = parser.parse_args()

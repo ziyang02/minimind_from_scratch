@@ -13,7 +13,7 @@ from inference import (
 )
 from model.model import NinjaMindConfig, NinjaMindForCausalLM
 from model.model_lora import LoRA, apply_lora, save_lora
-from webui import _history_pairs
+from webui import _history_pairs, _parse_model_specs
 
 ROOT = Path(__file__).resolve().parent.parent
 TOKENIZER_DIR = ROOT / "tokenizer"
@@ -71,6 +71,17 @@ def test_web_history_accepts_gradio_messages_and_legacy_pairs() -> None:
     ]
     assert _history_pairs(messages) == [("one", "first")]
     assert _history_pairs([["two", "second"]]) == [("two", "second")]
+
+
+def test_web_model_specs_parse_named_checkpoints() -> None:
+    assert _parse_model_specs(["SFT=base.pth", "DPO = aligned.pth"]) == {
+        "SFT": "base.pth",
+        "DPO": "aligned.pth",
+    }
+    with pytest.raises(ValueError, match="NAME=CHECKPOINT"):
+        _parse_model_specs(["missing-separator"])
+    with pytest.raises(ValueError, match="duplicate"):
+        _parse_model_specs(["SFT=a.pth", "SFT=b.pth"])
 
 
 def test_stream_generation_cache_matches_full_recompute() -> None:

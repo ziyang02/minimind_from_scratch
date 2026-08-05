@@ -1,0 +1,181 @@
+nohup: ignoring input
+wrote 2000 rollout prompts to dataset/rl_from_dpo.jsonl
+branch 1/3: DPO from the SFT baseline
+model: 63.91M params | vocab 6400 | device cuda:0
+loaded weights from out/minimind3/full_sft_768.pth
+dataset: 17166 preference pairs
+epoch 1/1 step 1/1000 loss 0.6931 preference_accuracy 0.000 chosen_reward 0.0000 rejected_reward 0.0000 margin 0.0000 lr 2.50e-08
+epoch 1/1 step 11/1000 loss 0.7163 preference_accuracy 0.000 chosen_reward -0.0320 rejected_reward 0.0137 margin -0.0457 lr 2.75e-07
+epoch 1/1 step 21/1000 loss 0.7057 preference_accuracy 0.375 chosen_reward -0.0100 rejected_reward 0.0129 margin -0.0229 lr 5.00e-07
+epoch 1/1 step 31/1000 loss 0.6890 preference_accuracy 0.625 chosen_reward -0.0108 rejected_reward -0.0202 margin 0.0094 lr 5.00e-07
+epoch 1/1 step 41/1000 loss 0.6842 preference_accuracy 0.375 chosen_reward -0.0104 rejected_reward -0.0303 margin 0.0199 lr 5.00e-07
+epoch 1/1 step 51/1000 loss 0.6600 preference_accuracy 0.625 chosen_reward 0.0063 rejected_reward -0.0648 margin 0.0711 lr 4.99e-07
+epoch 1/1 step 61/1000 loss 0.6628 preference_accuracy 0.500 chosen_reward -0.0667 rejected_reward -0.1347 margin 0.0680 lr 4.98e-07
+epoch 1/1 step 71/1000 loss 0.6924 preference_accuracy 0.750 chosen_reward 0.0024 rejected_reward -0.0011 margin 0.0036 lr 4.97e-07
+epoch 1/1 step 81/1000 loss 0.6541 preference_accuracy 0.625 chosen_reward -0.0233 rejected_reward -0.1112 margin 0.0879 lr 4.96e-07
+epoch 1/1 step 91/1000 loss 0.6553 preference_accuracy 0.875 chosen_reward -0.0048 rejected_reward -0.0881 margin 0.0832 lr 4.94e-07
+epoch 1/1 step 101/1000 loss 0.6764 preference_accuracy 0.625 chosen_reward -0.0067 rejected_reward -0.0513 margin 0.0446 lr 4.93e-07
+epoch 1/1 step 111/1000 loss 0.6709 preference_accuracy 0.625 chosen_reward -0.0671 rejected_reward -0.1136 margin 0.0465 lr 4.91e-07
+epoch 1/1 step 121/1000 loss 0.6392 preference_accuracy 0.875 chosen_reward 0.0326 rejected_reward -0.0836 margin 0.1163 lr 4.89e-07
+epoch 1/1 step 131/1000 loss 0.6113 preference_accuracy 1.000 chosen_reward 0.1071 rejected_reward -0.0660 margin 0.1732 lr 4.86e-07
+epoch 1/1 step 141/1000 loss 0.6875 preference_accuracy 0.625 chosen_reward 0.0266 rejected_reward 0.0113 margin 0.0153 lr 4.84e-07
+epoch 1/1 step 151/1000 loss 0.6688 preference_accuracy 0.750 chosen_reward 0.0111 rejected_reward -0.0403 margin 0.0515 lr 4.81e-07
+epoch 1/1 step 161/1000 loss 0.6481 preference_accuracy 0.750 chosen_reward 0.0478 rejected_reward -0.0495 margin 0.0973 lr 4.78e-07
+epoch 1/1 step 171/1000 loss 0.6378 preference_accuracy 0.500 chosen_reward 0.0353 rejected_reward -0.0961 margin 0.1314 lr 4.74e-07
+epoch 1/1 step 181/1000 loss 0.6914 preference_accuracy 0.625 chosen_reward -0.0261 rejected_reward -0.0494 margin 0.0233 lr 4.71e-07
+epoch 1/1 step 191/1000 loss 0.6288 preference_accuracy 0.750 chosen_reward -0.0180 rejected_reward -0.1695 margin 0.1514 lr 4.67e-07
+epoch 1/1 step 201/1000 loss 0.6344 preference_accuracy 0.750 chosen_reward 0.0590 rejected_reward -0.0712 margin 0.1302 lr 4.64e-07
+epoch 1/1 step 211/1000 loss 0.5822 preference_accuracy 0.750 chosen_reward -0.0012 rejected_reward -0.3390 margin 0.3379 lr 4.60e-07
+epoch 1/1 step 221/1000 loss 0.6234 preference_accuracy 0.750 chosen_reward 0.0657 rejected_reward -0.0949 margin 0.1606 lr 4.55e-07
+epoch 1/1 step 231/1000 loss 0.5566 preference_accuracy 0.750 chosen_reward 0.2238 rejected_reward -0.0940 margin 0.3177 lr 4.51e-07
+epoch 1/1 step 241/1000 loss 0.6423 preference_accuracy 0.750 chosen_reward 0.1682 rejected_reward 0.0526 margin 0.1156 lr 4.46e-07
+epoch 1/1 step 251/1000 loss 0.6723 preference_accuracy 0.375 chosen_reward 0.0115 rejected_reward -0.0423 margin 0.0538 lr 4.42e-07
+epoch 1/1 step 261/1000 loss 0.6676 preference_accuracy 0.375 chosen_reward 0.0258 rejected_reward -0.0401 margin 0.0659 lr 4.37e-07
+epoch 1/1 step 271/1000 loss 0.5714 preference_accuracy 0.750 chosen_reward 0.0422 rejected_reward -0.2753 margin 0.3175 lr 4.32e-07
+epoch 1/1 step 281/1000 loss 0.6099 preference_accuracy 0.750 chosen_reward 0.1099 rejected_reward -0.1227 margin 0.2326 lr 4.26e-07
+epoch 1/1 step 291/1000 loss 0.6518 preference_accuracy 0.625 chosen_reward 0.0657 rejected_reward -0.0268 margin 0.0926 lr 4.21e-07
+epoch 1/1 step 301/1000 loss 0.6598 preference_accuracy 0.625 chosen_reward 0.1083 rejected_reward 0.0249 margin 0.0834 lr 4.15e-07
+epoch 1/1 step 311/1000 loss 0.6192 preference_accuracy 0.750 chosen_reward 0.2180 rejected_reward 0.0033 margin 0.2147 lr 4.10e-07
+epoch 1/1 step 321/1000 loss 0.5229 preference_accuracy 1.000 chosen_reward 0.2813 rejected_reward -0.1153 margin 0.3966 lr 4.04e-07
+epoch 1/1 step 331/1000 loss 0.6053 preference_accuracy 0.625 chosen_reward 0.0475 rejected_reward -0.1855 margin 0.2330 lr 3.98e-07
+epoch 1/1 step 341/1000 loss 0.6217 preference_accuracy 0.625 chosen_reward 0.1033 rejected_reward -0.0571 margin 0.1603 lr 3.92e-07
+epoch 1/1 step 351/1000 loss 0.6544 preference_accuracy 0.625 chosen_reward -0.0201 rejected_reward -0.1284 margin 0.1083 lr 3.85e-07
+epoch 1/1 step 361/1000 loss 0.7219 preference_accuracy 0.625 chosen_reward -0.0606 rejected_reward -0.0513 margin -0.0093 lr 3.79e-07
+epoch 1/1 step 371/1000 loss 0.6582 preference_accuracy 0.750 chosen_reward -0.0195 rejected_reward -0.1136 margin 0.0941 lr 3.73e-07
+epoch 1/1 step 381/1000 loss 0.5722 preference_accuracy 1.000 chosen_reward 0.0564 rejected_reward -0.2241 margin 0.2805 lr 3.66e-07
+epoch 1/1 step 391/1000 loss 0.5570 preference_accuracy 0.625 chosen_reward 0.2554 rejected_reward -0.0956 margin 0.3510 lr 3.59e-07
+epoch 1/1 step 401/1000 loss 0.6334 preference_accuracy 0.500 chosen_reward 0.0321 rejected_reward -0.1441 margin 0.1761 lr 3.53e-07
+epoch 1/1 step 411/1000 loss 0.7086 preference_accuracy 0.750 chosen_reward -0.1231 rejected_reward -0.1034 margin -0.0196 lr 3.46e-07
+epoch 1/1 step 421/1000 loss 0.6531 preference_accuracy 0.500 chosen_reward -0.0286 rejected_reward -0.1526 margin 0.1241 lr 3.39e-07
+epoch 1/1 step 431/1000 loss 0.5701 preference_accuracy 0.750 chosen_reward 0.2418 rejected_reward -0.0486 margin 0.2904 lr 3.32e-07
+epoch 1/1 step 441/1000 loss 0.5240 preference_accuracy 0.875 chosen_reward 0.1446 rejected_reward -0.3394 margin 0.4840 lr 3.25e-07
+epoch 1/1 step 451/1000 loss 0.6588 preference_accuracy 0.500 chosen_reward 0.0489 rejected_reward -0.0654 margin 0.1143 lr 3.18e-07
+epoch 1/1 step 461/1000 loss 0.5128 preference_accuracy 0.875 chosen_reward -0.0234 rejected_reward -0.4624 margin 0.4390 lr 3.11e-07
+epoch 1/1 step 471/1000 loss 0.7308 preference_accuracy 0.500 chosen_reward -0.1419 rejected_reward -0.1343 margin -0.0076 lr 3.04e-07
+epoch 1/1 step 481/1000 loss 0.5433 preference_accuracy 1.000 chosen_reward 0.0571 rejected_reward -0.2966 margin 0.3537 lr 2.97e-07
+epoch 1/1 step 491/1000 loss 0.5581 preference_accuracy 0.750 chosen_reward 0.0907 rejected_reward -0.2579 margin 0.3486 lr 2.89e-07
+epoch 1/1 step 501/1000 loss 0.5823 preference_accuracy 0.750 chosen_reward 0.0763 rejected_reward -0.2011 margin 0.2775 lr 2.82e-07
+epoch 1/1 step 511/1000 loss 0.7302 preference_accuracy 0.625 chosen_reward 0.0521 rejected_reward 0.0988 margin -0.0468 lr 2.75e-07
+epoch 1/1 step 521/1000 loss 0.5640 preference_accuracy 0.625 chosen_reward 0.2509 rejected_reward -0.0920 margin 0.3429 lr 2.68e-07
+epoch 1/1 step 531/1000 loss 0.6741 preference_accuracy 0.500 chosen_reward 0.0319 rejected_reward -0.0265 margin 0.0584 lr 2.61e-07
+epoch 1/1 step 541/1000 loss 0.5341 preference_accuracy 0.750 chosen_reward 0.1344 rejected_reward -0.2744 margin 0.4088 lr 2.53e-07
+epoch 1/1 step 551/1000 loss 0.5636 preference_accuracy 0.750 chosen_reward 0.0535 rejected_reward -0.3076 margin 0.3611 lr 2.46e-07
+epoch 1/1 step 561/1000 loss 0.5368 preference_accuracy 0.750 chosen_reward 0.3228 rejected_reward -0.1318 margin 0.4545 lr 2.39e-07
+epoch 1/1 step 571/1000 loss 0.6480 preference_accuracy 0.625 chosen_reward 0.0420 rejected_reward -0.0695 margin 0.1115 lr 2.32e-07
+epoch 1/1 step 581/1000 loss 0.4889 preference_accuracy 0.875 chosen_reward 0.3647 rejected_reward -0.1950 margin 0.5597 lr 2.25e-07
+epoch 1/1 step 591/1000 loss 0.5959 preference_accuracy 0.750 chosen_reward -0.0002 rejected_reward -0.2451 margin 0.2449 lr 2.18e-07
+epoch 1/1 step 601/1000 loss 0.5023 preference_accuracy 0.875 chosen_reward 0.2214 rejected_reward -0.4846 margin 0.7060 lr 2.11e-07
+epoch 1/1 step 611/1000 loss 0.5956 preference_accuracy 0.625 chosen_reward 0.2895 rejected_reward 0.0462 margin 0.2433 lr 2.04e-07
+epoch 1/1 step 621/1000 loss 0.6315 preference_accuracy 0.750 chosen_reward -0.1394 rejected_reward -0.3445 margin 0.2051 lr 1.97e-07
+epoch 1/1 step 631/1000 loss 0.4592 preference_accuracy 1.000 chosen_reward 0.2839 rejected_reward -0.2985 margin 0.5824 lr 1.91e-07
+epoch 1/1 step 641/1000 loss 0.5401 preference_accuracy 0.750 chosen_reward 0.0285 rejected_reward -0.4192 margin 0.4477 lr 1.84e-07
+epoch 1/1 step 651/1000 loss 0.5679 preference_accuracy 0.500 chosen_reward 0.1912 rejected_reward -0.1956 margin 0.3869 lr 1.77e-07
+epoch 1/1 step 661/1000 loss 0.6494 preference_accuracy 0.875 chosen_reward 0.0919 rejected_reward -0.0255 margin 0.1174 lr 1.71e-07
+epoch 1/1 step 671/1000 loss 0.6049 preference_accuracy 0.750 chosen_reward 0.1203 rejected_reward -0.0877 margin 0.2080 lr 1.65e-07
+epoch 1/1 step 681/1000 loss 0.4321 preference_accuracy 0.875 chosen_reward 0.2847 rejected_reward -0.4561 margin 0.7408 lr 1.58e-07
+epoch 1/1 step 691/1000 loss 0.5210 preference_accuracy 0.750 chosen_reward 0.1524 rejected_reward -0.3281 margin 0.4806 lr 1.52e-07
+epoch 1/1 step 701/1000 loss 0.6140 preference_accuracy 0.750 chosen_reward 0.0142 rejected_reward -0.1748 margin 0.1891 lr 1.46e-07
+epoch 1/1 step 711/1000 loss 0.6150 preference_accuracy 0.625 chosen_reward 0.1488 rejected_reward -0.1754 margin 0.3242 lr 1.40e-07
+epoch 1/1 step 721/1000 loss 0.4917 preference_accuracy 0.875 chosen_reward 0.2942 rejected_reward -0.1945 margin 0.4887 lr 1.35e-07
+epoch 1/1 step 731/1000 loss 0.5451 preference_accuracy 0.875 chosen_reward 0.0044 rejected_reward -0.3918 margin 0.3962 lr 1.29e-07
+epoch 1/1 step 741/1000 loss 0.6074 preference_accuracy 0.750 chosen_reward -0.0295 rejected_reward -0.2403 margin 0.2108 lr 1.24e-07
+epoch 1/1 step 751/1000 loss 0.5252 preference_accuracy 0.625 chosen_reward -0.0113 rejected_reward -0.7423 margin 0.7309 lr 1.18e-07
+epoch 1/1 step 761/1000 loss 0.6693 preference_accuracy 0.750 chosen_reward -0.0419 rejected_reward -0.1716 margin 0.1297 lr 1.13e-07
+epoch 1/1 step 771/1000 loss 0.5743 preference_accuracy 0.875 chosen_reward 0.1681 rejected_reward -0.1180 margin 0.2860 lr 1.08e-07
+epoch 1/1 step 781/1000 loss 0.4968 preference_accuracy 0.750 chosen_reward 0.2185 rejected_reward -0.3368 margin 0.5553 lr 1.04e-07
+epoch 1/1 step 791/1000 loss 0.7322 preference_accuracy 0.625 chosen_reward -0.2525 rejected_reward -0.4548 margin 0.2023 lr 9.91e-08
+epoch 1/1 step 801/1000 loss 0.5680 preference_accuracy 0.750 chosen_reward 0.1470 rejected_reward -0.2199 margin 0.3669 lr 9.47e-08
+epoch 1/1 step 811/1000 loss 0.5923 preference_accuracy 0.625 chosen_reward 0.0913 rejected_reward -0.1541 margin 0.2454 lr 9.05e-08
+epoch 1/1 step 821/1000 loss 0.5139 preference_accuracy 1.000 chosen_reward 0.1267 rejected_reward -0.2984 margin 0.4251 lr 8.64e-08
+epoch 1/1 step 831/1000 loss 0.6062 preference_accuracy 0.875 chosen_reward 0.0368 rejected_reward -0.1753 margin 0.2121 lr 8.26e-08
+epoch 1/1 step 841/1000 loss 0.6690 preference_accuracy 0.375 chosen_reward 0.1981 rejected_reward 0.0734 margin 0.1247 lr 7.90e-08
+epoch 1/1 step 851/1000 loss 0.5784 preference_accuracy 0.875 chosen_reward 0.0546 rejected_reward -0.2014 margin 0.2560 lr 7.55e-08
+epoch 1/1 step 861/1000 loss 0.5534 preference_accuracy 0.750 chosen_reward 0.0136 rejected_reward -0.3342 margin 0.3477 lr 7.23e-08
+epoch 1/1 step 871/1000 loss 0.5827 preference_accuracy 0.750 chosen_reward 0.3109 rejected_reward 0.0478 margin 0.2631 lr 6.93e-08
+epoch 1/1 step 881/1000 loss 0.5063 preference_accuracy 0.750 chosen_reward 0.0298 rejected_reward -0.5063 margin 0.5361 lr 6.64e-08
+epoch 1/1 step 891/1000 loss 0.6610 preference_accuracy 0.750 chosen_reward 0.1144 rejected_reward -0.0077 margin 0.1221 lr 6.38e-08
+epoch 1/1 step 901/1000 loss 0.7041 preference_accuracy 0.500 chosen_reward 0.0842 rejected_reward 0.0689 margin 0.0152 lr 6.15e-08
+epoch 1/1 step 911/1000 loss 0.6596 preference_accuracy 0.625 chosen_reward -0.0019 rejected_reward -0.0932 margin 0.0913 lr 5.93e-08
+epoch 1/1 step 921/1000 loss 0.5083 preference_accuracy 0.875 chosen_reward 0.0491 rejected_reward -0.3918 margin 0.4408 lr 5.74e-08
+epoch 1/1 step 931/1000 loss 0.5760 preference_accuracy 0.625 chosen_reward 0.1656 rejected_reward -0.1288 margin 0.2944 lr 5.56e-08
+epoch 1/1 step 941/1000 loss 0.6111 preference_accuracy 0.625 chosen_reward -0.0147 rejected_reward -0.1966 margin 0.1819 lr 5.41e-08
+epoch 1/1 step 951/1000 loss 0.6536 preference_accuracy 0.625 chosen_reward -0.0027 rejected_reward -0.0984 margin 0.0957 lr 5.29e-08
+epoch 1/1 step 961/1000 loss 0.6163 preference_accuracy 0.625 chosen_reward -0.0662 rejected_reward -0.2630 margin 0.1968 lr 5.18e-08
+epoch 1/1 step 971/1000 loss 0.6857 preference_accuracy 0.500 chosen_reward -0.0958 rejected_reward -0.1542 margin 0.0584 lr 5.10e-08
+epoch 1/1 step 981/1000 loss 0.6652 preference_accuracy 0.625 chosen_reward 0.0487 rejected_reward -0.0535 margin 0.1022 lr 5.05e-08
+epoch 1/1 step 991/1000 loss 0.5507 preference_accuracy 0.875 chosen_reward 0.1351 rejected_reward -0.2036 margin 0.3387 lr 5.01e-08
+checkpoint saved: out/post_training/dpo/dpo_768.pth
+branch 2/3: PPO from the same SFT baseline
+model: 63.91M params | vocab 6400 | device cuda:0
+loaded weights from out/minimind3/full_sft_768.pth
+dataset: 2000 prompts
+epoch 1/1 step 1/300 loss 0.0943 reward 0.101 kl 0.0000 pg -0.0014 vf 0.2359
+epoch 1/1 step 11/300 loss 0.1091 reward 0.062 kl 0.0001 pg -0.0001 vf 0.2609
+epoch 1/1 step 21/300 loss 0.0631 reward 0.268 kl 0.0024 pg -0.0010 vf 0.1682
+epoch 1/1 step 31/300 loss 0.0301 reward 0.172 kl 0.0036 pg 0.0005 vf 0.1077
+epoch 1/1 step 41/300 loss -0.0025 reward 0.217 kl -0.0008 pg 0.0009 vf 0.0464
+epoch 1/1 step 51/300 loss 0.0010 reward 0.237 kl -0.0007 pg -0.0001 vf 0.0413
+epoch 1/1 step 61/300 loss -0.0143 reward 0.108 kl 0.0016 pg -0.0006 vf 0.0175
+epoch 1/1 step 71/300 loss -0.0126 reward 0.171 kl 0.0059 pg 0.0016 vf 0.0185
+epoch 1/1 step 81/300 loss -0.0148 reward 0.224 kl -0.0011 pg -0.0008 vf 0.0116
+epoch 1/1 step 91/300 loss -0.0130 reward 0.290 kl -0.0010 pg 0.0011 vf 0.0092
+epoch 1/1 step 101/300 loss -0.0176 reward 0.184 kl -0.0032 pg -0.0005 vf 0.0072
+epoch 1/1 step 111/300 loss -0.0226 reward 0.222 kl 0.0012 pg 0.0003 vf 0.0068
+epoch 1/1 step 121/300 loss -0.0204 reward 0.158 kl -0.0008 pg -0.0014 vf 0.0049
+epoch 1/1 step 131/300 loss -0.0144 reward 0.151 kl 0.0014 pg 0.0002 vf 0.0072
+epoch 1/1 step 141/300 loss -0.0198 reward 0.097 kl 0.0003 pg 0.0004 vf 0.0043
+epoch 1/1 step 151/300 loss -0.0176 reward 0.226 kl 0.0066 pg 0.0009 vf 0.0031
+epoch 1/1 step 161/300 loss -0.0259 reward 0.283 kl -0.0002 pg -0.0012 vf 0.0056
+epoch 1/1 step 171/300 loss -0.0204 reward 0.188 kl 0.0010 pg 0.0018 vf 0.0047
+epoch 1/1 step 181/300 loss -0.0204 reward 0.279 kl -0.0000 pg -0.0011 vf 0.0053
+epoch 1/1 step 191/300 loss -0.0244 reward 0.134 kl -0.0007 pg -0.0018 vf 0.0031
+epoch 1/1 step 201/300 loss -0.0221 reward 0.119 kl 0.0016 pg 0.0014 vf 0.0037
+epoch 1/1 step 211/300 loss -0.0172 reward 0.235 kl -0.0005 pg -0.0004 vf 0.0050
+epoch 1/1 step 221/300 loss -0.0220 reward 0.243 kl 0.0004 pg 0.0002 vf 0.0035
+epoch 1/1 step 231/300 loss -0.0208 reward 0.157 kl 0.0015 pg -0.0005 vf 0.0021
+epoch 1/1 step 241/300 loss -0.0173 reward 0.175 kl -0.0022 pg 0.0012 vf 0.0018
+epoch 1/1 step 251/300 loss -0.0204 reward 0.181 kl -0.0026 pg -0.0005 vf 0.0034
+epoch 1/1 step 261/300 loss -0.0228 reward 0.201 kl -0.0001 pg -0.0009 vf 0.0016
+epoch 1/1 step 271/300 loss -0.0239 reward 0.292 kl -0.0007 pg 0.0007 vf 0.0038
+epoch 1/1 step 281/300 loss -0.0200 reward 0.127 kl -0.0077 pg 0.0005 vf 0.0031
+epoch 1/1 step 291/300 loss -0.0208 reward 0.229 kl 0.0003 pg -0.0010 vf 0.0029
+checkpoint saved: out/post_training/ppo/ppo_768.pth
+branch 3/3: GRPO from the same SFT baseline
+model: 63.91M params | vocab 6400 | device cuda:0
+loaded weights from out/minimind3/full_sft_768.pth
+dataset: 2000 prompts | G=4
+epoch 1/1 step 1/300 loss -0.0010 reward 0.192 kl 0.0002
+epoch 1/1 step 11/300 loss -0.0002 reward 0.166 kl 0.0003
+epoch 1/1 step 21/300 loss -0.0669 reward 0.289 kl 0.0005
+epoch 1/1 step 31/300 loss -0.0006 reward 0.107 kl 0.0009
+epoch 1/1 step 41/300 loss 0.0008 reward 0.260 kl 0.0010
+epoch 1/1 step 51/300 loss -0.0001 reward 0.145 kl 0.0008
+epoch 1/1 step 61/300 loss 0.1218 reward 0.185 kl 0.0010
+epoch 1/1 step 71/300 loss -0.0139 reward 0.296 kl 0.0023
+epoch 1/1 step 81/300 loss 0.0742 reward 0.278 kl 0.0013
+epoch 1/1 step 91/300 loss -0.0016 reward 0.210 kl 0.0026
+epoch 1/1 step 101/300 loss 0.0004 reward 0.201 kl 0.0008
+epoch 1/1 step 111/300 loss 0.0018 reward 0.226 kl 0.0034
+epoch 1/1 step 121/300 loss 0.0004 reward 0.161 kl 0.0042
+epoch 1/1 step 131/300 loss -0.0181 reward 0.135 kl 0.0040
+epoch 1/1 step 141/300 loss -0.0004 reward 0.249 kl 0.0026
+epoch 1/1 step 151/300 loss -0.0196 reward 0.201 kl 0.0048
+epoch 1/1 step 161/300 loss -0.0016 reward 0.097 kl 0.0014
+epoch 1/1 step 171/300 loss 0.0007 reward 0.093 kl 0.0031
+epoch 1/1 step 181/300 loss 0.0002 reward 0.206 kl 0.0019
+epoch 1/1 step 191/300 loss -0.0003 reward 0.173 kl 0.0038
+epoch 1/1 step 201/300 loss -0.0006 reward 0.185 kl 0.0013
+epoch 1/1 step 211/300 loss -0.0006 reward 0.151 kl 0.0039
+epoch 1/1 step 221/300 loss -0.0017 reward 0.161 kl 0.0034
+epoch 1/1 step 231/300 loss -0.0000 reward 0.123 kl 0.0012
+epoch 1/1 step 241/300 loss 0.0013 reward 0.104 kl 0.0030
+epoch 1/1 step 251/300 loss -0.0001 reward 0.106 kl 0.0021
+epoch 1/1 step 261/300 loss -0.0021 reward 0.137 kl 0.0034
+epoch 1/1 step 271/300 loss -0.0000 reward 0.188 kl 0.0025
+epoch 1/1 step 281/300 loss 0.0015 reward 0.180 kl 0.0042
+epoch 1/1 step 291/300 loss -0.0007 reward 0.090 kl 0.0020
+checkpoint saved: out/post_training/grpo/grpo_768.pth
+post-training comparison complete
+DPO:  out/post_training/dpo/dpo_768.pth
+PPO:  out/post_training/ppo/ppo_768.pth
+GRPO: out/post_training/grpo/grpo_768.pth

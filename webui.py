@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import inspect
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from inference import (
@@ -47,7 +47,7 @@ def _history_pairs(history: Sequence[Any] | None) -> list[tuple[str, str]]:
 
 
 def create_demo(
-    loaded: LoadedModel,
+    loaded: LoadedModel | Mapping[str, LoadedModel],
     *,
     system_prompt: str = "You are a helpful assistant.",
     sampling: SamplingConfig | None = None,
@@ -63,17 +63,21 @@ def create_demo(
         ) from exc
 
     sampling = sampling or SamplingConfig()
-    model_lock = threading.Lock()
+    loaded_models = dict(loaded) if isinstance(loaded, Mapping) else {"Model": loaded}
+    if not loaded_models:
+        raise ValueError("at least one loaded model is required")
+    model_locks = {name: threading.Lock() for name in loaded_models}
 
-    def respond(message: str, history: Sequence[Any]):
+    def stream_response(message: str, history: Sequence[Any], model_name: str):
         if not message.strip():
             yield ""
             return
         pairs = _history_pairs(history)
-        with model_lock:
+        selected = loaded_models[model_name]
+        with model_locks[model_name]:
             yield from stream_text(
-                loaded.model,
-                loaded.tokenizer,
+                selected.model,
+                selected.tokenizer,
                 message,
                 history=pairs,
                 system_prompt=system_prompt,
@@ -81,14 +85,50 @@ def create_demo(
                 config=sampling,
             )
 
-    interface_kwargs = {
-        "fn": respond,
-        "title": "NinjaMind Local Chat",
-        "description": (
-            f"Local streaming inference on {loaded.device}; weights: {loaded.source}. "
-            "No prompt or response is sent to a remote model service."
-        ),
-    }
+    if len(loaded_models) == 1:
+        only_name = next(iter(loaded_models))
+
+        def respond(message: str, history: Sequence[Any]):
+            yield from stream_response(message, history, only_name)
+
+        interface_kwargs = {
+            "fn": respond,
+            "title": "NinjaMind Local Chat",
+            "description": (
+                f"Local streaming inference on {loaded_models[only_name].device}; "
+                f"weights: {loaded_models[only_name].source}. "
+                "No prompt or response is sent to a remote model service."
+            ),
+        }
+    else:
+        default_name = next(iter(loaded_models))
+        selector = gr.Dropdown(
+            choices=list(loaded_models),
+            value=default_name,
+            label="模型",
+            info="切换模型后请清空旧对话，以便公平比较。",
+        )
+
+        def respond_comparison(
+            message: str,
+            history: Sequence[Any],
+            model_name: str,
+        ):
+            yield from stream_response(message, history, model_name)
+
+        details = "; ".join(
+            f"{name}: {model.source}" for name, model in loaded_models.items()
+        )
+        interface_kwargs = {
+            "fn": respond_comparison,
+            "additional_inputs": [selector],
+            "additional_inputs_accordion": "模型选择",
+            "title": "NinjaMind SFT / DPO / PPO / GRPO 对比",
+            "description": (
+                f"All models run locally on {loaded_models[default_name].device}. "
+                f"{details}. No prompt or response is sent to a remote service."
+            ),
+        }
     # Gradio 5 accepts ``type='messages'``; Gradio 6 removed the argument and
     # uses message dictionaries unconditionally. Keep the optional web extra
     # compatible with both supported API generations.
@@ -105,24 +145,56 @@ def build_web_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server-name", default="127.0.0.1")
     parser.add_argument("--server-port", type=int, default=7860)
     parser.add_argument("--share", action="store_true")
+    parser.add_argument(
+        "--model",
+        action="append",
+        default=[],
+        metavar="NAME=CHECKPOINT",
+        help="load a named model for comparison; repeat for multiple checkpoints",
+    )
     return parser
+
+
+def _parse_model_specs(specs: Sequence[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for spec in specs:
+        if "=" not in spec:
+            raise ValueError(f"invalid --model {spec!r}; expected NAME=CHECKPOINT")
+        name, checkpoint = (part.strip() for part in spec.split("=", 1))
+        if not name or not checkpoint:
+            raise ValueError(f"invalid --model {spec!r}; expected NAME=CHECKPOINT")
+        if name in parsed:
+            raise ValueError(f"duplicate model name: {name}")
+        parsed[name] = checkpoint
+    return parsed
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_web_parser().parse_args(argv)
-    loaded = load_model_and_tokenizer(
-        tokenizer_dir=args.tokenizer_dir,
-        checkpoint=args.checkpoint,
-        lora_checkpoint=args.lora_checkpoint,
-        device=args.device,
-        hidden_size=args.hidden_size,
-        num_hidden_layers=args.num_hidden_layers,
-        num_attention_heads=args.num_attention_heads,
-        num_key_value_heads=args.num_key_value_heads,
-        max_position_embeddings=args.max_position_embeddings,
-        use_moe=args.use_moe,
-        lora_rank=args.lora_rank,
-        lora_alpha=args.lora_alpha,
+    model_specs = _parse_model_specs(args.model)
+    if model_specs and (args.checkpoint or args.lora_checkpoint):
+        raise ValueError("use either repeated --model or --checkpoint/--lora-checkpoint")
+
+    def load(checkpoint, lora_checkpoint=None):
+        return load_model_and_tokenizer(
+            tokenizer_dir=args.tokenizer_dir,
+            checkpoint=checkpoint,
+            lora_checkpoint=lora_checkpoint,
+            device=args.device,
+            hidden_size=args.hidden_size,
+            num_hidden_layers=args.num_hidden_layers,
+            num_attention_heads=args.num_attention_heads,
+            num_key_value_heads=args.num_key_value_heads,
+            max_position_embeddings=args.max_position_embeddings,
+            use_moe=args.use_moe,
+            lora_rank=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+        )
+
+    loaded = (
+        {name: load(checkpoint) for name, checkpoint in model_specs.items()}
+        if model_specs
+        else load(args.checkpoint, args.lora_checkpoint)
     )
     demo = create_demo(
         loaded,

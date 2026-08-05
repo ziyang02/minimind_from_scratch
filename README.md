@@ -161,6 +161,69 @@ uv run python scripts/smoke_train.py \
   --artifact /tmp/minimind-smoke.json
 ```
 
+## 用官方数据训练 MiniMind-3 Zero
+
+仓库自带的 `tokenizer/` 只用于离线 tiny 测试（372 tokens），不能用于正式中文训练。
+正式配方会单独下载 MiniMind-3 的 **6400-token 官方 tokenizer**，并采用官方 Dense
+结构：`hidden_size=768`、`8 layers`、`8 query heads / 4 KV heads`。
+
+先用 mini 数据完成一次 Pretrain → SFT 闭环：
+
+```bash
+# 约 2.8 GB 数据；同时下载 tokenizer_minimind3/
+uv run python scripts/download_dataset.py
+
+# 默认 1 epoch；对应官网约两小时的单张 RTX 3090 配方
+bash scripts/train_minimind3.sh
+
+# CLI 对话
+uv run ninjamind \
+  --checkpoint out/minimind3/full_sft_768.pth \
+  --tokenizer-dir tokenizer_minimind3
+```
+
+显存不足时降低 micro-batch、增加梯度累积：
+
+```bash
+PRETRAIN_BATCH=8 SFT_BATCH=4 PRETRAIN_ACCUMULATION=16 \
+  bash scripts/train_minimind3.sh
+```
+
+多卡单机可设置 `NPROC_PER_NODE=GPU数量`，脚本会自动改用 `torchrun`。
+若云镜像已经预装兼容的 PyTorch，可先执行 `python -m pip install -e .`，再通过
+`USE_SYSTEM_PYTHON=1 bash scripts/train_minimind3.sh` 直接复用镜像环境。
+
+从同一个 SFT checkpoint 分叉比较 DPO、PPO 和 GRPO：
+
+```bash
+# 官方偏好数据约 54 MB；已有 tokenizer 时无需重复下载
+uv run python scripts/download_dataset.py \
+  --files dpo.jsonl \
+  --skip_tokenizer \
+  --mirror
+
+# 默认是单卡有界实验：DPO 1000、PPO 300、GRPO 300 optimizer steps
+USE_SYSTEM_PYTHON=1 bash scripts/train_post_rl.sh
+```
+
+三个分支分别从 `out/minimind3/full_sft_768.pth` 初始化，绝不串行继承彼此权重，输出到
+`out/post_training/{dpo,ppo,grpo}/`。PPO/GRPO 默认从 DPO `chosen` 构造 2000 个 rollout
+prompt，并用字符 unigram/bigram overlap F1 提供连续参考奖励。这比 exact-match 更适合弱小
+模型避免全零奖励，但仍属于可复现实验奖励，不等同于官网采用的独立 Reward Model。
+步数和样本量可通过 `DPO_STEPS`、`PPO_STEPS`、`GRPO_STEPS`、`RL_SAMPLES` 覆盖。
+
+完整数据（约 24 GB）使用：
+
+```bash
+uv run python scripts/download_dataset.py --full
+DATA_VARIANT=full bash scripts/train_minimind3.sh
+```
+
+正式配方使用 `--split_strategy full --validation_fraction 0`，因为官方数据已经过清洗去重，
+可跳过昂贵的逐样本 tensor 去重。数据文件仍会做 SHA-256 指纹并写进 checkpoint，保证严格
+resume 不会误接到被替换的数据。通用能力应另用独立 benchmark/人工题集评估，不能用训练集
+loss 代替效果结论。
+
 `cpu` 和 `cu130` 是互斥 extras。Linux CPU 环境使用官方 PyTorch CPU wheel；`cu130` 仅用于驱动和平台匹配的 CUDA 13.0 环境。
 
 ## 训练入口
@@ -384,7 +447,8 @@ minimind_from_scratch/
 ## 项目边界
 
 - 当前提交的是训练系统和实验代码，不包含正式大模型 checkpoint。
-- PPO/GRPO 使用 toy containment reward，不等同于生产 reward model 或 AI judge。
+- PPO/GRPO 支持 toy containment 或连续 reference-overlap reward；两者都不等同于生产
+  Reward Model 或 AI judge。
 - 已验证单进程 CPU 和双进程 CPU/Gloo；CUDA AMP、NCCL 和多 GPU 尚未实跑。
 - 精确 resume 覆盖单进程和同 world size DDP 的 Pretrain、SFT、LoRA；不覆盖 DPO、PPO、GRPO。
 - DDP fault recovery 已验证双进程 CPU/Gloo；CUDA/NCCL 和 multi-node 尚未实跑。

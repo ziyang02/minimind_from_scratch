@@ -14,3 +14,4 @@ wheels/
 out/
 dataset/*.jsonl
 dataset/.cache/
+tokenizer_minimind3/

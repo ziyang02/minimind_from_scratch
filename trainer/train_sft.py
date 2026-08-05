@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 from transformers import AutoTokenizer
 
-from dataset.lm_dataset import SFTDataset, split_supervised_dataset
+from dataset.lm_dataset import SFTDataset, split_supervised_dataset, use_full_supervised_dataset
 from trainer.artifacts import write_training_artifacts
 from trainer.trainer_utils import (
     add_model_args,
@@ -54,11 +54,19 @@ def main():
             load_weights(model, args.init_from, device, context)
         full_dataset = SFTDataset(args.data_path, tokenizer, max_length=args.max_length)
         split_seed = args.seed if args.split_seed is None else args.split_seed
-        dataset, validation_dataset, split_metadata = split_supervised_dataset(
-            full_dataset,
-            validation_fraction=args.validation_fraction,
-            seed=split_seed,
-        )
+        if args.split_strategy == "full":
+            if args.validation_fraction != 0:
+                raise ValueError("--split_strategy full requires --validation_fraction 0")
+            dataset, validation_dataset, split_metadata = use_full_supervised_dataset(
+                full_dataset,
+                seed=split_seed,
+            )
+        else:
+            dataset, validation_dataset, split_metadata = split_supervised_dataset(
+                full_dataset,
+                validation_fraction=args.validation_fraction,
+                seed=split_seed,
+            )
         rank0_print(
             f"dataset: {split_metadata['raw_samples']} raw -> "
             f"{split_metadata['train_samples']} train / "

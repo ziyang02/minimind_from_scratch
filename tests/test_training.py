@@ -29,6 +29,7 @@ from trainer.trainer_utils import (
     masked_mean,
     normalize_token_weighted_gradients,
     parse_distributed_env,
+    reference_overlap_reward,
     sample_generate,
     save_checkpoint,
     setup_distributed,
@@ -166,6 +167,9 @@ def test_masked_statistics_and_rule_reward():
     assert containment_reward("The answer is Sydney.", "Sydney") == 1.0
     assert containment_reward("The answer is Sydney.", "Melbourne") == 0.0
     assert containment_reward("anything", "   ") == 0.0
+    assert reference_overlap_reward("光合作用需要阳光和水", "光合作用需要阳光") > 0.7
+    assert reference_overlap_reward("completely unrelated", "光合作用需要阳光") == 0.0
+    assert reference_overlap_reward("anything", "") == 0.0
 
 
 def test_grpo_group_advantages_are_normalized_per_prompt():

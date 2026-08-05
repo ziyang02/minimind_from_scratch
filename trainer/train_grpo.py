@@ -40,6 +40,7 @@ from trainer.trainer_utils import (
     make_grad_scaler,
     masked_mean,
     rank0_print,
+    reference_overlap_reward,
     sample_generate,
     save_checkpoint,
     set_dataloader_epoch,
@@ -80,6 +81,11 @@ def _train(args, context):
     optimizer = torch.optim.AdamW(trainable, lr=args.lr)
     scaler = make_grad_scaler(device)
     optimizer.zero_grad(set_to_none=True)
+    reward_function = (
+        reference_overlap_reward
+        if args.reward_mode == "overlap"
+        else containment_reward
+    )
 
     dataset = RLAIFDataset(args.data_path, tokenizer, max_length=args.max_prompt_len)
     loader = build_dataloader(
@@ -140,7 +146,7 @@ def _train(args, context):
             ]
             rewards = torch.tensor(
                 [
-                    containment_reward(completion, answer)
+                    reward_function(completion, answer)
                     for completion, answer in zip(completions, answers, strict=True)
                 ],
                 device=device,
@@ -232,7 +238,10 @@ def _train(args, context):
         optimizer=optimizer,
         step=optimizer_step,
         stage="grpo",
-        extra={"reference_checkpoint": args.init_from},
+        extra={
+            "reference_checkpoint": args.init_from,
+            "reward_mode": args.reward_mode,
+        },
         context=context,
     )
 
@@ -250,6 +259,12 @@ def main():
     parser.add_argument("--kl_coef", type=float, default=0.04)
     parser.add_argument("--clip_eps", type=float, default=0.2)
     parser.add_argument("--update_epochs", type=int, default=1)
+    parser.add_argument(
+        "--reward_mode",
+        choices=("containment", "overlap"),
+        default="containment",
+        help="rule reward: exact containment or continuous reference overlap",
+    )
     add_model_args(parser)
     add_train_args(parser, default_lr=1e-6)
     args = parser.parse_args()

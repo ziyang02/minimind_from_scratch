@@ -14,6 +14,7 @@ import json
 import math
 import os
 import time
+from collections import Counter
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -332,6 +333,15 @@ def add_supervised_eval_args(parser):
         type=float,
         default=0.1,
         help="fraction of unique, grouped samples reserved for validation (0 disables)",
+    )
+    parser.add_argument(
+        "--split_strategy",
+        choices=("exact", "full"),
+        default="exact",
+        help=(
+            "exact: tensor-level dedup + deterministic validation split; "
+            "full: trust a prevalidated source and train every record without a hold-out"
+        ),
     )
     parser.add_argument(
         "--split_seed",
@@ -1266,3 +1276,38 @@ def containment_reward(completion, answer):
 
     answer = (answer or "").strip()
     return 1.0 if answer and answer in completion else 0.0
+
+
+def reference_overlap_reward(completion, answer):
+    """Continuous character n-gram F1 against a preferred reference answer.
+
+    This lightweight reward is intended for small, reproducible PPO/GRPO
+    experiments where loading a separate billion-parameter reward model would
+    dominate the policy itself.  It mixes unigram and bigram overlap so weak
+    policies still receive a graded signal instead of almost-always-zero exact
+    match rewards.  It is not a substitute for a learned quality judge.
+    """
+
+    def normalized_characters(text):
+        return [character.lower() for character in str(text) if character.isalnum()]
+
+    def ngram_f1(candidate, reference, width):
+        candidate_ngrams = [tuple(candidate[i : i + width]) for i in range(len(candidate) - width + 1)]
+        reference_ngrams = [tuple(reference[i : i + width]) for i in range(len(reference) - width + 1)]
+        if not candidate_ngrams or not reference_ngrams:
+            return 0.0
+        overlap = sum((Counter(candidate_ngrams) & Counter(reference_ngrams)).values())
+        if overlap == 0:
+            return 0.0
+        precision = overlap / len(candidate_ngrams)
+        recall = overlap / len(reference_ngrams)
+        return 2 * precision * recall / (precision + recall)
+
+    candidate = normalized_characters(completion)
+    reference = normalized_characters(answer)
+    if not candidate or not reference:
+        return 0.0
+    unigram = ngram_f1(candidate, reference, 1)
+    bigram = ngram_f1(candidate, reference, 2)
+    containment_bonus = 0.1 if "".join(reference) in "".join(candidate) else 0.0
+    return min(1.0, 0.6 * unigram + 0.3 * bigram + containment_bonus)

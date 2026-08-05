@@ -5,7 +5,8 @@ The expected schema per stage:
 
     Pretrain   {"text": "raw document text ..."}
     SFT        {"conversations": [{"role": "user", "content": "..."},
-                                   {"role": "assistant", "content": "..."}, ...]}
+                                   {"role": "assistant", "content": "...",
+                                    "reasoning_content": "...", "tool_calls": "[...]"}, ...]}
     DPO        {"chosen":   [ ...chat messages ending in the preferred reply... ],
                 "rejected": [ ...chat messages ending in the dispreferred reply... ]}
     RLAIF      {"conversations": [...user turn(s)...], "answer": "reference answer"}
@@ -34,6 +35,8 @@ import hashlib
 import json
 import math
 import os
+from array import array
+from collections.abc import Sequence
 
 import torch
 from torch.utils.data import Dataset
@@ -44,6 +47,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 __all__ = [
     "load_jsonl",
+    "IndexedJSONL",
     "build_chat_prompt",
     "pad_to_length",
     "make_supervised_tensors",
@@ -52,6 +56,7 @@ __all__ = [
     "rl_collate",
     "IndexedDataset",
     "split_supervised_dataset",
+    "use_full_supervised_dataset",
     "PretrainDataset",
     "SFTDataset",
     "DPODataset",
@@ -78,6 +83,78 @@ def load_jsonl(path):
     return samples
 
 
+class IndexedJSONL(Sequence):
+    """Memory-efficient random access to a large JSONL file.
+
+    Only byte offsets and source line numbers are retained in memory.  This is
+    important for the official MiniMind files, whose 1--14 GB JSON objects can
+    otherwise consume many times their on-disk size when expanded into Python
+    dictionaries.  A file handle is opened lazily in each DataLoader process.
+    """
+
+    def __init__(self, path):
+        self.path = os.fspath(path)
+        self.offsets = array("Q")
+        self.line_numbers = array("Q")
+        digest = hashlib.sha256()
+        with open(self.path, "rb") as source:
+            line_number = 0
+            while True:
+                offset = source.tell()
+                line = source.readline()
+                if not line:
+                    break
+                line_number += 1
+                digest.update(line)
+                if line.strip():
+                    self.offsets.append(offset)
+                    self.line_numbers.append(line_number)
+        self.source_sha256 = digest.hexdigest()
+        self._reader = None
+        self._reader_pid = None
+
+    def __len__(self):
+        return len(self.offsets)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self[item] for item in range(*index.indices(len(self)))]
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise TypeError(f"JSONL index must be an integer, got {index!r}")
+        if index < 0:
+            index += len(self)
+        if not 0 <= index < len(self):
+            raise IndexError("JSONL index out of range")
+        current_pid = os.getpid()
+        if (
+            self._reader is None
+            or self._reader.closed
+            or self._reader_pid != current_pid
+        ):
+            if self._reader is not None and not self._reader.closed:
+                self._reader.close()
+            self._reader = open(self.path, "rb")
+            self._reader_pid = current_pid
+        self._reader.seek(self.offsets[index])
+        raw = self._reader.readline()
+        try:
+            return json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            line_number = self.line_numbers[index]
+            raise ValueError(f"{self.path}:{line_number}: invalid JSON ({exc})") from exc
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_reader"] = None
+        state["_reader_pid"] = None
+        return state
+
+    def __del__(self):
+        reader = getattr(self, "_reader", None)
+        if reader is not None:
+            reader.close()
+
+
 def build_chat_prompt(tokenizer, messages, add_generation_prompt=False):
     """Render a list of ``{"role", "content"}`` messages into a single string.
 
@@ -87,11 +164,38 @@ def build_chat_prompt(tokenizer, messages, add_generation_prompt=False):
     the assistant header, ready for the model to continue (used at inference
     and for RL rollouts).
     """
-    return tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=add_generation_prompt,
-    )
+    normalized_messages = []
+    tools = None
+    for message_index, source_message in enumerate(messages):
+        message = dict(source_message)
+        if message.get("role") == "system" and message.get("tools"):
+            raw_tools = message["tools"]
+            if isinstance(raw_tools, str):
+                try:
+                    tools = json.loads(raw_tools)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"message {message_index} has invalid JSON in tools ({exc})"
+                    ) from exc
+            else:
+                tools = raw_tools
+        raw_tool_calls = message.get("tool_calls")
+        if isinstance(raw_tool_calls, str) and raw_tool_calls:
+            try:
+                message["tool_calls"] = json.loads(raw_tool_calls)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"message {message_index} has invalid JSON in tool_calls ({exc})"
+                ) from exc
+        normalized_messages.append(message)
+
+    template_kwargs = {
+        "tokenize": False,
+        "add_generation_prompt": add_generation_prompt,
+    }
+    if tools is not None:
+        template_kwargs["tools"] = tools
+    return tokenizer.apply_chat_template(normalized_messages, **template_kwargs)
 
 
 def pad_to_length(
@@ -207,7 +311,7 @@ class _JSONLDataset(Dataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.pad_id = tokenizer.pad_token_id
-        self.samples = load_jsonl(data_path)
+        self.samples = IndexedJSONL(data_path)
 
     def __len__(self):
         return len(self.samples)
@@ -246,7 +350,9 @@ class IndexedDataset(Dataset):
     def __init__(self, dataset, indices):
         super().__init__()
         self.dataset = dataset
-        self.indices = tuple(indices)
+        # Keep ``range`` compact for multi-million-record official datasets;
+        # exact split lists remain tuples for stable, immutable metadata.
+        self.indices = indices if isinstance(indices, range) else tuple(indices)
         for index in self.indices:
             if isinstance(index, bool) or not isinstance(index, int):
                 raise TypeError(f"dataset indices must be integers, got {index!r}")
@@ -299,10 +405,15 @@ class PretrainDataset(_JSONLDataset):
     def _encode_sample(self, sample):
         if not isinstance(sample, dict) or "text" not in sample:
             raise ValueError("pretrain samples must contain a 'text' field")
-        # Wrap in bos/eos so the model learns document boundaries.
-        text = str(sample["text"])
-        text = f"{self.tokenizer.bos_token}{text}{self.tokenizer.eos_token}"
-        ids = self.tokenizer(text, add_special_tokens=False).input_ids
+        # Reserve space for both boundaries. Appending EOS before generic
+        # right truncation would silently remove it from every long record.
+        ids = self.tokenizer(
+            str(sample["text"]),
+            add_special_tokens=False,
+            truncation=True,
+            max_length=self.max_length - 2,
+        ).input_ids
+        ids = [self.tokenizer.bos_token_id, *ids, self.tokenizer.eos_token_id]
         ids = pad_to_length(ids, self.max_length, self.pad_id)
         # Supervise every real (non-padding) token.
         loss_mask = [1 if tok != self.pad_id else 0 for tok in ids]
@@ -345,14 +456,27 @@ class SFTDataset(_JSONLDataset):
                 raise ValueError(
                     f"SFT message {message_index} must contain string role/content fields"
                 )
-            payload.append(
-                {
-                    "role": role,
-                    "content": None
-                    if hide_assistant_content and role == "assistant"
-                    else content,
-                }
-            )
+            normalized = {
+                "role": role,
+                "content": "" if hide_assistant_content and role == "assistant" else content,
+            }
+            # MiniMind-3 SFT mixes reasoning and Tool Use into the same file.
+            # Preserve the fields consumed by its official chat template.  For
+            # split grouping, hide every assistant-authored field so alternate
+            # plain/reasoning/tool-call answers cannot leak across the split.
+            for field in ("reasoning_content", "tools", "tool_calls"):
+                if field not in message or message[field] is None:
+                    continue
+                if hide_assistant_content and role == "assistant":
+                    continue
+                value = message[field]
+                if not isinstance(value, (str, list, dict)):
+                    raise ValueError(
+                        f"SFT message {message_index} field {field!r} must be "
+                        "a string, list, or object"
+                    )
+                normalized[field] = value
+            payload.append(normalized)
         return {"conversations": payload}
 
     def _encode_conversation(self, conversations):
@@ -374,6 +498,18 @@ class SFTDataset(_JSONLDataset):
         conversations = self._conversation_payload(sample)["conversations"]
         ids = self._encode_conversation(conversations)
         loss_mask = generate_response_loss_mask(ids, self.start_ids, self.end_ids, self.max_length)
+        # If the newest assistant answer is itself longer than max_length, left
+        # truncation removes its opening marker.  The retained window is then
+        # entirely a continuation of that answer followed by its closing
+        # marker, so it is still a valid causal-LM training chunk.  Supervise
+        # that continuation instead of rejecting an otherwise useful sample.
+        if not any(loss_mask) and conversations[-1]["role"] == "assistant":
+            for end in range(len(ids) - len(self.end_ids), -1, -1):
+                if ids[end : end + len(self.end_ids)] == self.end_ids:
+                    loss_mask[: end + len(self.end_ids)] = [1] * (
+                        end + len(self.end_ids)
+                    )
+                    break
         if not any(loss_mask):
             location = f" {index}" if index is not None else ""
             raise ValueError(
@@ -396,9 +532,6 @@ class SFTDataset(_JSONLDataset):
             sample,
             hide_assistant_content=True,
         )["conversations"]
-        for message in conversations:
-            if message["role"] == "assistant":
-                message["content"] = ""
         ids = self._encode_conversation(conversations)
         assistant_slots = generate_response_loss_mask(
             ids,
@@ -562,6 +695,53 @@ def split_supervised_dataset(dataset, *, validation_fraction, seed):
     return train_dataset, validation_dataset, metadata
 
 
+def use_full_supervised_dataset(dataset, *, seed):
+    """Use every record without token-level deduplication or a hold-out split.
+
+    The official MiniMind dataset is already cleaned and deduplicated.  This
+    fast path avoids tokenizing every multi-GB record before training starts.
+    Its source-file SHA-256 still participates in strict resume identity, so a
+    silently changed file cannot be resumed as the same run.
+    """
+
+    if not isinstance(dataset, (PretrainDataset, SFTDataset)):
+        raise TypeError("use_full_supervised_dataset requires PretrainDataset or SFTDataset")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise TypeError("seed must be an integer")
+    stage = "pretrain" if isinstance(dataset, PretrainDataset) else "sft"
+    count = len(dataset)
+    source_sha256 = dataset.samples.source_sha256
+    fingerprint_payload = {
+        "algorithm": "full-jsonl-sha256-v1",
+        "stage": stage,
+        "seed": seed,
+        "source_sha256": source_sha256,
+        "max_length": dataset.max_length,
+    }
+    metadata = {
+        "schema_version": 1,
+        "algorithm": "full-jsonl-sha256-v1",
+        "deduplication": "source-declared-prevalidated",
+        "stage": stage,
+        "source_path": dataset.data_path,
+        "source_sha256": source_sha256,
+        "max_length": dataset.max_length,
+        "seed": seed,
+        "requested_validation_fraction": 0.0,
+        "actual_validation_fraction": 0.0,
+        "raw_samples": count,
+        "unique_samples": count,
+        "duplicates_removed": 0,
+        "group_count": count,
+        "train_samples": count,
+        "validation_samples": 0,
+        "train_groups": count,
+        "validation_groups": 0,
+        "split_fingerprint": f"sha256:{_stable_payload_hash(fingerprint_payload)}",
+    }
+    return IndexedDataset(dataset, range(count)), None, metadata
+
+
 # --------------------------------------------------------------------------- #
 # 3. DPO — Direct Preference Optimization; chosen vs. rejected pairs           #
 # --------------------------------------------------------------------------- #
@@ -608,19 +788,21 @@ class DPODataset(_JSONLDataset):
 
         chosen_response = response_suffix(chosen)
         rejected_response = response_suffix(rejected)
-        response_budget = max(len(chosen_response), len(rejected_response))
+        # Preference corpora occasionally contain answers longer than the
+        # configured context.  Keep a shared response prefix instead of
+        # aborting a multi-hour run when one such pair is sampled.
+        response_budget = min(
+            max(len(chosen_response), len(rejected_response)),
+            self.max_length - len(self.start_ids),
+        )
+        if response_budget <= 0:
+            raise ValueError(
+                f"DPO max_length={self.max_length} cannot fit the assistant marker"
+            )
+        chosen_response = chosen_response[:response_budget]
+        rejected_response = rejected_response[:response_budget]
         prompt_budget = self.max_length - response_budget
-        if prompt_budget < len(self.start_ids):
-            raise ValueError(
-                f"DPO sample {index} response does not fit within max_length={self.max_length}; "
-                "increase --max_length"
-            )
         common_prompt = prompt_ids[-prompt_budget:]
-        if common_prompt[-len(self.start_ids) :] != self.start_ids:
-            raise ValueError(
-                f"DPO sample {index} cannot retain the assistant marker within "
-                f"max_length={self.max_length}; increase --max_length"
-            )
 
         def tensors(response_ids):
             ids = common_prompt + response_ids
@@ -663,10 +845,32 @@ class RLAIFDataset(_JSONLDataset):
 
     def __getitem__(self, index):
         sample = self.samples[index]
+        conversations = sample.get("conversations")
+        if not isinstance(conversations, list) or not conversations:
+            raise ValueError(f"RLAIF sample {index} needs non-empty conversations")
+
+        # Official MiniMind RLAIF records end in a placeholder assistant turn
+        # (for example ``空``/``无``).  Rollout prompts must stop immediately
+        # before that turn; otherwise the policy sees a fake answer and then a
+        # second assistant header.  Reference-style datasets may put a real
+        # preferred answer there, which we retain for a rule-based reward.
+        answer = sample.get("answer", "")
+        prompt_messages = conversations
+        if conversations[-1].get("role") == "assistant":
+            final_content = conversations[-1].get("content", "")
+            if (
+                not str(answer).strip()
+                and isinstance(final_content, str)
+                and final_content.strip() not in {"", "空", "无", "none", "null"}
+            ):
+                answer = final_content
+            prompt_messages = conversations[:-1]
+        if not prompt_messages:
+            raise ValueError(f"RLAIF sample {index} has no prompt before assistant")
         prompt = build_chat_prompt(
-            self.tokenizer, sample["conversations"], add_generation_prompt=True
+            self.tokenizer, prompt_messages, add_generation_prompt=True
         )
-        return {"prompt": prompt, "answer": sample.get("answer", "")}
+        return {"prompt": prompt, "answer": str(answer)}
 
 
 # --------------------------------------------------------------------------- #

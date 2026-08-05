@@ -7,10 +7,14 @@ from transformers import AutoTokenizer
 from dataset.lm_dataset import (
     DPODataset,
     IndexedDataset,
+    IndexedJSONL,
     PretrainDataset,
+    RLAIFDataset,
     SFTDataset,
+    build_chat_prompt,
     rl_collate,
     split_supervised_dataset,
+    use_full_supervised_dataset,
 )
 from model import model_lora
 from model.model import NinjaMindConfig, NinjaMindForCausalLM
@@ -41,6 +45,65 @@ def write_jsonl(path, rows):
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
         encoding="utf-8",
     )
+
+
+def test_indexed_jsonl_is_lazy_random_access_and_full_mode_fingerprints_source(tmp_path):
+    tokenizer = AutoTokenizer.from_pretrained("tokenizer")
+    path = tmp_path / "indexed.jsonl"
+    path.write_text(
+        json.dumps({"text": "first"}) + "\n\n" + json.dumps({"text": "second"}) + "\n",
+        encoding="utf-8",
+    )
+
+    records = IndexedJSONL(path)
+    assert len(records) == 2
+    assert records[-1] == {"text": "second"}
+    assert records.line_numbers.tolist() == [1, 3]
+
+    dataset = PretrainDataset(path, tokenizer, max_length=24)
+    train, validation, metadata = use_full_supervised_dataset(dataset, seed=42)
+    assert isinstance(train.indices, range)
+    assert list(train.indices) == [0, 1]
+    assert validation is None
+    assert metadata["source_sha256"] == records.source_sha256
+    assert metadata["algorithm"] == "full-jsonl-sha256-v1"
+    assert metadata["split_fingerprint"].startswith("sha256:")
+
+
+def test_minimind3_tool_fields_reach_the_chat_template():
+    class RecordingTokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            self.messages = messages
+            self.kwargs = kwargs
+            return "rendered"
+
+    tokenizer = RecordingTokenizer()
+    tools = [{"type": "function", "function": {"name": "weather"}}]
+    tool_calls = [{"type": "function", "function": {"name": "weather"}}]
+    messages = [
+        {"role": "system", "content": "use tools", "tools": json.dumps(tools)},
+        {"role": "user", "content": "Shanghai weather?"},
+        {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "I should call the weather tool.",
+            "tool_calls": json.dumps(tool_calls),
+        },
+    ]
+
+    assert build_chat_prompt(tokenizer, messages) == "rendered"
+    assert tokenizer.kwargs["tools"] == tools
+    assert tokenizer.messages[-1]["reasoning_content"].startswith("I should")
+    assert tokenizer.messages[-1]["tool_calls"] == tool_calls
+
+    visible = SFTDataset._conversation_payload(
+        {"conversations": messages}, hide_assistant_content=False
+    )["conversations"]
+    hidden = SFTDataset._conversation_payload(
+        {"conversations": messages}, hide_assistant_content=True
+    )["conversations"]
+    assert visible[-1]["tool_calls"] == json.dumps(tool_calls)
+    assert hidden[-1] == {"role": "assistant", "content": ""}
 
 
 def test_tokenizer_special_ids_and_chat_template():
@@ -86,6 +149,16 @@ def test_dataset_shapes_and_sft_masks_only_assistant_response():
     assert preference["mask_rejected"].sum() > 0
 
 
+def test_pretrain_truncation_reserves_the_eos_boundary(tmp_path):
+    tokenizer = AutoTokenizer.from_pretrained("tokenizer")
+    path = tmp_path / "long_pretrain.jsonl"
+    write_jsonl(path, [{"text": "long document " * 100}])
+
+    _, targets, mask = PretrainDataset(path, tokenizer, max_length=16)[0]
+    supervised_targets = targets[mask.bool()]
+    assert supervised_targets[-1].item() == tokenizer.eos_token_id
+
+
 def test_rl_collate_left_truncates_and_restores_tokenizer_state():
     tokenizer = AutoTokenizer.from_pretrained("tokenizer")
     tokenizer.padding_side = "right"
@@ -123,6 +196,82 @@ def test_sft_left_truncation_preserves_latest_assistant_response(tmp_path):
     supervised = tokenizer.decode(targets[mask.bool()].tolist(), skip_special_tokens=False)
     assert supervised == "The answer is four.<|im_end|>"
     assert "old context" not in supervised
+
+
+def test_sft_trains_on_tail_when_assistant_response_exceeds_window(tmp_path):
+    tokenizer = AutoTokenizer.from_pretrained("tokenizer")
+    path = tmp_path / "very_long_sft.jsonl"
+    sample = {
+        "conversations": [
+            {"role": "user", "content": "Give a long answer."},
+            {"role": "assistant", "content": "useful continuation " * 100},
+        ]
+    }
+    path.write_text(json.dumps(sample) + "\n", encoding="utf-8")
+
+    _, targets, mask = SFTDataset(path, tokenizer, max_length=32)[0]
+
+    supervised = tokenizer.decode(targets[mask.bool()].tolist(), skip_special_tokens=False)
+    assert mask.sum() >= 30
+    assert supervised.endswith("<|im_end|>")
+    assert "useful continuation" in supervised
+
+
+def test_rlaif_strips_placeholder_and_recovers_optional_reference(tmp_path):
+    tokenizer = AutoTokenizer.from_pretrained("tokenizer")
+    path = tmp_path / "rlaif.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "conversations": [
+                    {"role": "user", "content": "Question one"},
+                    {"role": "assistant", "content": "空"},
+                ]
+            },
+            {
+                "conversations": [
+                    {"role": "user", "content": "Question two"},
+                    {"role": "assistant", "content": "Preferred answer"},
+                ]
+            },
+        ],
+    )
+
+    dataset = RLAIFDataset(path, tokenizer, max_length=64)
+    placeholder = dataset[0]
+    referenced = dataset[1]
+
+    assert placeholder["answer"] == ""
+    assert "空" not in placeholder["prompt"]
+    assert placeholder["prompt"].endswith("<|im_start|>assistant\n")
+    assert referenced["answer"] == "Preferred answer"
+    assert "Preferred answer" not in referenced["prompt"]
+
+
+def test_dpo_truncates_an_answer_that_exceeds_the_context(tmp_path):
+    tokenizer = AutoTokenizer.from_pretrained("tokenizer")
+    path = tmp_path / "oversized_dpo.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "chosen": [
+                    {"role": "user", "content": "Pick one"},
+                    {"role": "assistant", "content": "good answer " * 100},
+                ],
+                "rejected": [
+                    {"role": "user", "content": "Pick one"},
+                    {"role": "assistant", "content": "bad answer " * 100},
+                ],
+            }
+        ],
+    )
+
+    preference = DPODataset(path, tokenizer, max_length=32)[0]
+
+    assert preference["mask_chosen"].sum() > 0
+    assert preference["mask_rejected"].sum() > 0
 
 
 def test_pretrain_split_exact_dedup_is_stable_and_preserves_dataset_metadata(tmp_path):
