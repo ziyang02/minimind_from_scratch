@@ -20,6 +20,13 @@ from inference import (
     stream_text,
 )
 
+SHOWCASE_MODELS = {
+    "SFT": "out/showcase/sft_768_inference.pth",
+    "DPO": "out/showcase/dpo_768_inference.pth",
+    "PPO": "out/showcase/ppo_768_inference.pth",
+    "GRPO": "out/showcase/grpo_768_inference.pth",
+}
+
 
 def _history_pairs(history: Sequence[Any] | None) -> list[tuple[str, str]]:
     """Normalise both legacy tuple history and Gradio message dictionaries."""
@@ -146,6 +153,11 @@ def build_web_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server-port", type=int, default=7860)
     parser.add_argument("--share", action="store_true")
     parser.add_argument(
+        "--showcase",
+        action="store_true",
+        help="load the packaged SFT/DPO/PPO/GRPO comparison models",
+    )
+    parser.add_argument(
         "--model",
         action="append",
         default=[],
@@ -171,9 +183,15 @@ def _parse_model_specs(specs: Sequence[str]) -> dict[str, str]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_web_parser().parse_args(argv)
-    model_specs = _parse_model_specs(args.model)
+    if args.showcase and args.model:
+        raise ValueError("use either --showcase or repeated --model")
+    if args.showcase and args.tokenizer_dir == "tokenizer":
+        args.tokenizer_dir = "tokenizer_minimind3"
+    model_specs = dict(SHOWCASE_MODELS) if args.showcase else _parse_model_specs(args.model)
     if model_specs and (args.checkpoint or args.lora_checkpoint):
-        raise ValueError("use either repeated --model or --checkpoint/--lora-checkpoint")
+        raise ValueError(
+            "use --showcase/repeated --model or --checkpoint/--lora-checkpoint"
+        )
 
     def load(checkpoint, lora_checkpoint=None):
         return load_model_and_tokenizer(

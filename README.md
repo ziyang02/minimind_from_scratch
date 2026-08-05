@@ -142,6 +142,9 @@ Pretrain、SFT 和 LoRA 的单进程/DDP checkpoint 保存：
 
 要求 Python `>=3.10`，推荐使用 [uv](https://docs.astral.sh/uv/)。
 
+第一次接触命令行、只想下载四个训练结果并在聊天页面体验，请直接阅读
+[给朋友的零基础体验指南](FRIEND_QUICKSTART.md)。
+
 ```bash
 git clone https://github.com/ziyang02/minimind_from_scratch.git
 cd minimind_from_scratch
@@ -180,6 +183,12 @@ bash scripts/train_minimind3.sh
 uv run ninjamind \
   --checkpoint out/minimind3/full_sft_768.pth \
   --tokenizer-dir tokenizer_minimind3
+```
+
+如果已经解压发布页提供的四模型展示包，可一条命令启动本地对比页面：
+
+```bash
+uv run python webui.py --showcase --device cpu
 ```
 
 显存不足时降低 micro-batch、增加梯度累积：
